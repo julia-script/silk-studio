@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 (async () => {
-  const { assert, fs, path, root, studio, options, binary, launch, stop, inspector, temporary, primary, sleep } = await import('./internal.mjs');
+  const { assert, fs, path, root, options, binary, launch, stop, inspector, temporary, primary, sleep } = await import('./internal.mjs');
   const { values: args } = options('Exercise native Studio controls through user-equivalent inspector input.\nUses an isolated copy of the browser fixture at both desktop viewport sizes, with screenshots and semantic snapshots.\nBuild Studio --release --bundle first.', {
     app: { type: 'string' }, artifacts: { type: 'string', default: path.join(root, 'build/native-parity') },
   });
@@ -14,7 +14,7 @@
     const log = path.join(output, 'app.log');
     let child;
     try {
-      fs.copyFileSync(path.join(studio, 'tests/explorations.silkdesign'), document);
+      fs.copyFileSync(path.join(root, 'modules/tests/explorations.silkdesign'), document);
       child = launch(app, ['--inspect', `--width=${width}`, `--height=${height}`, document], log, { env: { ...process.env, SILK_UI_INSPECT: address } });
       const ask = inspector(address, 45000);
       const query = (role, label) => ask('query', { role, label, exact: true });

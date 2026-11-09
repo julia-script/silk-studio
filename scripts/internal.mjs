@@ -6,10 +6,9 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { root, run, build } from '../../../scripts/internal.mjs';
+import { root, run, build } from './build.mjs';
 
 export { assert, fs, path, os, sleep, root, run, build };
-export const studio = path.join(root, 'examples/studio');
 export const primary = process.platform === 'darwin' ? 'meta' : 'control';
 
 export function options(description, definitions, { positionals = false } = {}) {

@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 (async () => {
-  const { assert, fs, path, root, run, options, binary, launch, stop, waitForExit, inspector, ready, temporary, primary, sleep } = await import('./internal.mjs');
-  const { values: args } = options('Drive isolated release Studio through its inspector, without OS clicks or model shortcuts.\nBuild Studio, ui-inspect-cli and ui-inspect-mcp in release mode first.\nArtifacts include ten-frame marquee/resize mosaics, whole-app screenshot and MCP image/timings.\n--stress adds and exercises the 100k page through the command menu.', {
+  const { assert, fs, path, root, run, build, options, binary, launch, stop, waitForExit, inspector, ready, temporary, primary, sleep } = await import('./internal.mjs');
+  const { repositoryRoot } = await import('./dependency-root.mjs');
+  const { values: args } = options('Drive isolated release Studio through its inspector, without OS clicks or model shortcuts.\nBuild Studio in release mode first; pinned inspector tools are built automatically unless overridden.\nArtifacts include ten-frame marquee/resize mosaics, whole-app screenshot and MCP image/timings.\n--stress adds and exercises the 100k page through the command menu.', {
     app: { type: 'string' }, cli: { type: 'string' }, mcp: { type: 'string' },
     artifacts: { type: 'string', default: path.join(root, 'build/native-inspector-check') }, stress: { type: 'boolean' },
   });
   const app = args.app ? path.resolve(args.app) : binary('silk-studio-native-app');
-  const cli = args.cli ? path.resolve(args.cli) : binary('ui-inspect-cli');
-  const mcp = args.mcp ? path.resolve(args.mcp) : binary('ui-inspect-mcp');
+  if (!args.cli || !args.mcp) run('silk', ['check', '--manifest-path', path.join(root, 'modules/desktop/silk.toml')]);
+  const cli = args.cli ? path.resolve(args.cli) : build(path.join(repositoryRoot('lib-ui'), 'modules/inspect/cli'), { release: true });
+  const mcp = args.mcp ? path.resolve(args.mcp) : build(path.join(repositoryRoot('lib-ui'), 'modules/inspect/mcp'), { release: true });
   const artifacts = path.resolve(args.artifacts);
   fs.mkdirSync(artifacts, { recursive: true });
   const directory = temporary('silk-inspect-');

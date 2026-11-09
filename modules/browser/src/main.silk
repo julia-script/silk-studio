@@ -1,9 +1,9 @@
-//! Silk Studio in a browser tab: the editor of `examples/studio/app`, built for wasm32 and run
+//! Silk Studio in a browser tab: the editor of `modules/desktop`, built for wasm32 and run
 //! by lib-ui's published browser page. The document is kept in the page's localStorage, so a reload
 //! finds it again; the first visit opens the starter design. There are no native menus or file
 //! dialogs, so opening, saving as and exporting files are the desktop app's; shortcuts work.
 //!
-//!   node examples/browser serve examples/studio/browser
+//!   node scripts/browser serve
 //!
 //! With `?check` in the page's address it runs the window host's rendering check, like the
 //! native app's `--check`: it clicks Rectangle, presses Tab and compares the canvas with the CPU
@@ -336,7 +336,7 @@ static if Intrinsic.targetArchitecture() == "wasm32" {
       |> Effect.provideMut<Allocator>(&mut allocator)
   }
 } else {
-  /// The browser build only; natively, run `examples/studio/app`.
+  /// The browser build only; natively, run `modules/desktop`.
   pub fn main() -> i32 {
     return 0
   }

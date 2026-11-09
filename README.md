@@ -1,26 +1,50 @@
-# Silk Studio — native
+# Silk Studio
 
-A desktop version of the Studio design editor, written in Silk. The pinned
-`lib-ui` packages own the application model, controls, layout and text input;
+[julia-script/silk-studio](https://github.com/julia-script/silk-studio) is a desktop
+and browser design editor written in Silk. The desktop version runs natively.
+The pinned `lib-ui` packages own the application model, controls, layout and text input;
 `lib-native` supplies the native window, menus, clipboard, input method and file
 dialogs. Canvas layers use the shared `lib-graphics` editor and renderer on
-WebGPU/Dawn. The compiled app needs no browser, webview, JavaScript runtime or server.
+WebGPU/Dawn. The compiled desktop app needs no browser, webview, JavaScript runtime or server.
 
-## Run
+## Clone and set up
 
-Complete the [local setup](../../README.md#run-an-application-locally) first
-(`silk use`, LLVM 22 and, on macOS, `SDKROOT`), then run from the **nonstd repository root**:
+Install [Silk](https://silklang.org/) if `silk` is not on `PATH`, plus Node.js 22+
+and LLVM 22. Clone this repository and run all commands below from its root:
 
 ```sh
-node examples/studio/scripts/studio --release
-node examples/studio/scripts/studio --release --file ~/Design.silkdesign
+git clone https://github.com/julia-script/silk-studio.git
+cd silk-studio
+silk use
 ```
 
+`silk use` installs the compiler pinned by the root `silk.toml`. Dependencies are
+resolved at the Git revisions in the package manifests; sibling checkouts are not
+required. Do not run `scripts/setup-ci.mjs` for ordinary local use: it provisions
+hosted CI and cannot configure your terminal.
+
+## Run natively
+
+The macOS quickstart requires Apple Silicon macOS 26+, Xcode with the macOS SDK,
+Node.js 22+, and LLVM 22. Apple's `/usr/bin/clang` is not LLVM 22. With Homebrew
+LLVM 22 installed at its usual path:
+
+```sh
+export SILK_CLANG=/opt/homebrew/opt/llvm/bin/clang
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+"$SILK_CLANG" --version # must report clang 22
+node scripts/studio run --release
+node scripts/studio run --release --file ~/Design.silkdesign
+```
+
+If LLVM 22 is elsewhere, set `SILK_CLANG` to its absolute executable path. Keep
+both exports in the terminal used to run the app and checks.
+
 The Node runner invokes Silk directly; package manifests provide native dependencies.
-On macOS the window bridge requires macOS 14 or newer. Native platform dependencies
-on Linux/Windows are the same as pinned `lib-native` and `examples/graphics-demo`; this port
-was written on macOS arm64; the `check` run (a scripted click and Tab, read back and
-compared with the CPU reference) also passes in X11 windows on Linux lavapipe.
+Linux/Windows platform dependencies follow the pinned
+[`lib-native`](https://github.com/silk-lang/lib-native) package. This port was
+written on macOS arm64; the `check` run (a scripted click and Tab, read back and
+compared with the CPU reference) has also passed in X11 windows on Linux lavapipe.
 
 The window app draws through `ui_app_window`, whose frames are drawn on a render thread from
 the scene the app hands over. GPU-retained overview images (see
@@ -30,33 +54,49 @@ the scene the app hands over. GPU-retained overview images (see
 To build a self-contained macOS application, including fallback fonts:
 
 ```sh
-node examples/studio/scripts/studio --release --bundle
+node scripts/studio run --release --bundle --build-only
 open 'build/Silk Studio.app'
 ```
 
 The local development bundle is unsigned. Its binary links only to macOS system
 libraries/frameworks; it does not depend on a running compiler or this checkout.
 The licensed Noto Serif/Mono fallback subsets and their OFL are kept in
-`assets/fonts` and staged under `Contents/Resources/examples/studio/assets/fonts`.
-The launcher changes to Resources so the same runtime paths work in the bundle.
+`assets/fonts` at the repository root and staged under
+`Contents/Resources/assets/fonts`. The runtime uses `assets/fonts/...`; the
+launcher changes to Resources so the same paths work in the bundle.
 
 ## In the browser
 
-`examples/studio/browser` (`silk-studio-browser`) is the same editor built for wasm32, in a
-browser tab with WebGPU and JSPI (Chrome or Edge 137 or later):
+`modules/browser` (`silk-studio-browser`) is the same editor built for wasm32, in a
+browser tab with WebGPU and JSPI (Chrome or Edge 137 or later). After the clone
+and `silk use` steps above, with Node.js 22+ and LLVM 22 installed:
 
 ```sh
-node examples/browser serve examples/studio/browser   # http://127.0.0.1:8050/
+node scripts/browser serve   # http://127.0.0.1:8050/
+# Optional: choose another port, or build without serving.
+node scripts/browser serve --port 8051
+node scripts/browser build
 ```
 
-The shared browser runner uses the published `lib-ui` browser payload and resolves
-WebGPU exports/runtime assets from the pinned `lib-native` Git cache, not sibling
+The browser runner defaults to `modules/browser`; no package argument is needed.
+It discovers LLVM 22+ through `clang-22` on `PATH`, macOS Homebrew LLVM, then
+`clang` on `PATH`. An explicit `SILK_CLANG` takes precedence, but no override is
+needed when a compatible compiler is found.
+
+The runner uses the published `lib-ui` browser payload and resolves WebGPU
+exports/runtime assets from the pinned `lib-native` Git cache, not sibling
 checkouts or deleted source trees. It preserves the 8 MiB wasm linker stack.
 
 It keeps the document in the page's localStorage (under `silk-app:studio`), so a reload finds it
 again; the first visit opens the starter design. There are no native menus or file dialogs:
 opening, saving as and exporting files are the desktop app's, and the fonts are the bundled Noto
 families. Add `?check` to the address for the same check as `--check`.
+
+Silk dev.63 can emit `MOD0007` for required `Platform` method imports
+([silk#2819](https://github.com/silk-lang/silk/issues/2819)) and browser imports
+`generated_webgpu_exports`/`libm` that supply C/wasm exports. Keep these imports:
+removing them can break method lookup or browser linkage. These warnings do not
+mean the build failed; no warning suppression is enabled.
 
 ## Editing
 
@@ -102,12 +142,19 @@ reliably. SVG text metrics depend on fonts in the viewer.
 ## Validation
 
 ```sh
-node examples/studio/scripts/test --release
-node examples/studio/scripts/studio check --release
-# After building ui-inspect-cli and ui-inspect-mcp in release mode:
-node examples/studio/scripts/inspect-check --stress
-node examples/studio/scripts/parity-check
+node scripts/test --release
+node scripts/studio check --release
+node scripts/studio run --release --build-only
+node scripts/inspect-check --stress
+node scripts/parity-check
+node scripts/camera-check
+node scripts/challenge-check
+node scripts/browser test
 ```
+
+`inspect-check` automatically resolves and builds its CLI and MCP tools from the
+pinned `lib-ui` dependency. Explicit tool paths remain supported with `--cli` and
+`--mcp`; no separate sibling checkout or manual inspector build is needed.
 
 The parity check opens an isolated copy of the browser starter at 1440×960 and
 1000×700, exercises controls through the inspector, and saves screenshots and
@@ -127,10 +174,8 @@ The contract executable tests pointer-driven creation, native inspector input,
 undo/redo, subtree transforms, Alt-drag/cancel, validated file round trips, selected
 PNG/SVG exports, high-zoom vector text, cache reset, and 100k-element edits. It also
 prints CPU timings for selection, UI layout, and scene construction. These are not
-GPU timings or display FPS. The macOS test runner retains the SDK-link workaround
-for compiler libSystem stubs that omit CPU-renderer math symbols. It requires an
-absolute LLVM 22 `SILK_CLANG` path, wraps link invocations only, and removes its
-temporary wrapper after the run.
+GPU timings or display FPS. On macOS, use the `SILK_CLANG` and `SDKROOT` exports
+from the native quickstart so CPU-renderer math symbols link against the real SDK.
 
 The window check scripts real UI input, reads the GPU surface, compares it with
 the CPU rendering of the same scene, and writes `/tmp/silk-studio-native-check.png`.
@@ -139,7 +184,7 @@ See [PERFORMANCE.md](PERFORMANCE.md) for the measured workload and limits.
 The optional local UI inspector is off in release builds unless explicitly enabled:
 
 ```sh
-SILK_UI_INSPECT=/tmp/silk-studio.sock node examples/studio/scripts/studio --release --inspect
+SILK_UI_INSPECT=/tmp/silk-studio.sock node scripts/studio run --release --inspect
 ```
 
 For reproducible window sizes, the executable accepts `--width=1440 --height=960`.
@@ -149,7 +194,7 @@ the canvas; `capture sequence.png --count 10 --interval 100` returns a contact s
 actual times and frame numbers. `pointer --phase down/move/up --x X --y Y` and
 `key KEY --phase down/up` feed the same UI dispatcher and application event pump as window
 input. Compound clicks process each event before the next. See the pinned
-`lib-ui` repository's `inspect/cli` and `inspect/mcp` documentation.
+[`lib-ui`](https://github.com/silk-lang/lib-ui) repository's inspector CLI and MCP documentation.
 
 Marquee movement requests a frame even when the selected IDs do not change. The canvas
 revision participates in invalidation independently of the control tree. This covers empty
@@ -163,15 +208,28 @@ whole canvas units. Cloud, collaboration, and font discovery are outside this po
 
 ## Code
 
-- `src/model.silk`, `editing.silk`: document state, history, gestures, bulk editing.
-- `src/view.silk`: native UI, virtual layer list, inspector and on-canvas text input.
-- `src/render.silk`: retained document/scene, scaled text tiles, viewport cropping,
-  natural text sizing, selection overlays, and PNG rendering.
-- `src/format.silk`, `exports.silk`: validated portable files and SVG output.
-- `app/src/files.silk`: atomic storage, detached autosave jobs, desktop fonts.
-- `app/src/desktop.silk`: native window, GPU presentation, dialogs, and event loop.
+The root `silk.toml` defines four workspace packages:
 
-The stress image's 400×250 grayscale samples in `src/pixels.silk` are the same
+- `modules/editor`: shared editor model, UI and rendering.
+- `modules/desktop`: native window, storage, fonts and event loop.
+- `modules/browser`: wasm/browser entry point.
+- `modules/tests`: editor contracts and `explorations.silkdesign`, the browser starter fixture.
+
+Key implementation files:
+
+- `modules/editor/src/model.silk`, `editing.silk`: document state, history, gestures, bulk editing.
+- `modules/editor/src/view.silk`: native UI, virtual layer list, inspector and on-canvas text input.
+- `modules/editor/src/render.silk`: retained document/scene, scaled text tiles, viewport cropping,
+  natural text sizing, selection overlays, and PNG rendering.
+- `modules/editor/src/format.silk`, `exports.silk`: validated portable files and SVG output.
+- `modules/desktop/src/files.silk`: atomic storage, detached autosave jobs, desktop fonts.
+- `modules/desktop/src/desktop.silk`: native window, GPU presentation, dialogs, and event loop.
+
+This repository preserves the history extracted from
+[`silk-lang/nonstd`](https://github.com/silk-lang/nonstd/tree/86d346ad822a430a029bb08c0d06a846430a81b0/examples/studio)
+`examples/studio` at source commit `86d346ad822a430a029bb08c0d06a846430a81b0`.
+
+The stress image's 400×250 grayscale samples in `modules/editor/src/pixels.silk` are the same
 user-supplied image data used by the browser demo. Text tile caches are invalidated
 when replacing documents. Scene geometry is retained across selection-only frames.
 
@@ -186,9 +244,9 @@ from the tweet in Arial, Georgia and Courier New, with the normal native fallbac
 
 The screenshot is embedded unchanged in the executable and SVG exports. Its ICC
 profile is converted to sRGB for the native atlas. The optional, self-contained
-Python 3 generator `python3 examples/studio/scripts/embed-tweet` regenerates the
-embedded asset from `assets/tweet-challenge.png`; normal builds and checks do not
-use Python. Native `.silkdesign` files preserve the browser's `image` and normalized
+Node generator `node scripts/embed-tweet` regenerates the embedded asset from
+`assets/tweet-challenge.png`; Python is not required. Native `.silkdesign` files
+preserve the browser's `image` and normalized
 `imageCrop` fields, including coordinates precise enough for source-pixel round trips.
 
 Repeated labels share measurements and raster tiles by text, font, weight, color
@@ -213,9 +271,9 @@ batch compatible image crops and reuse image texture bindings within each pass.
 Run the release contracts and the real-event inspector checks without a recording:
 
 ```sh
-node examples/studio/scripts/test --release
-node examples/studio/scripts/studio --release --build-only
-node examples/studio/scripts/challenge-check --leave-open
+node scripts/test --release
+node scripts/studio run --release --build-only
+node scripts/challenge-check --leave-open
 ```
 
 The headless workload reports input, model, UI layout and scene composition CPU
@@ -239,7 +297,7 @@ retained document and update the visible labels rather than rebuilding every lay
 After building the release app:
 
 ```sh
-node examples/studio/scripts/camera-check
+node scripts/camera-check
 ```
 
 This runs 120 zoom inputs, 40 wheel pans, and a 40-movement hand drag through the native UI dispatcher with

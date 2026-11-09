@@ -4,7 +4,7 @@ Measured on an Apple M1 Max, macOS arm64, with the repository's Silk
 `0.1.0-dev.47+d5e63a44393e`, LLVM 22.1.8, release optimization. Run:
 
 ```sh
-node examples/studio/scripts/test --release
+node scripts/test --release
 ```
 
 The page contains 100,000 independent rectangles arranged as the supplied image,
@@ -42,8 +42,8 @@ not a GPU speed measurement.
 ## Image/text camera workload after glyph-cache and native rendering fixes
 
 Measured on the same Apple M1 Max at 1440×960 logical pixels, 2× scale, in a
-release build. Run `node examples/studio/scripts/camera-check` after
-building the app with `node examples/studio/scripts/studio --release --build-only`.
+release build. Run `node scripts/camera-check` after
+building the app with `node scripts/studio run --release --build-only`.
 Raw stage summaries are in [benchmarks/camera.json](benchmarks/camera.json).
 
 The benchmark creates 100k image/text cards in memory, then dispatches 120 zoom

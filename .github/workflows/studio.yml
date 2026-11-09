@@ -1,0 +1,102 @@
+name: Studio
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: Studio-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  SILK_HOME: ${{ github.workspace }}/.silk-home
+jobs:
+  cpu:
+    name: Linux contracts and CPU workloads
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-silk
+      - name: Check hand-maintained source formatting
+        run: node scripts/check-format.mjs
+      - name: Studio contracts and release CPU workload timings
+        shell: bash
+        run: |
+          mkdir -p build/test-results
+          node scripts/test --release 2>&1 | tee build/test-results/cpu.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-cpu
+          path: build/test-results
+          retention-days: 14
+  native:
+    name: Native window (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-26.04
+            setup: --linux-gpu
+          - os: macos-26
+            setup: ''
+          - os: windows-2025-vs2026
+            setup: ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - uses: ./.github/actions/setup-silk
+        with:
+          native-options: ${{ matrix.setup }}
+      - name: Rectangle click and Tab against CPU reference in X11 and Wayland
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p build/test-results
+          node scripts/studio check --release --backend all 2>&1 | tee build/test-results/native.log
+      - name: Rectangle click and Tab against CPU reference on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p build/test-results
+          node scripts/studio check --release 2>&1 | tee build/test-results/native.log
+      - name: Rectangle click and Tab against CPU reference on Win32
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/test-results | Out-Null
+          node scripts/studio check --release 2>&1 | Tee-Object -FilePath build/test-results/native.log
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-native-${{ matrix.os }}
+          path: build/test-results
+          retention-days: 14
+  browser:
+    name: Browser input and localStorage
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-silk
+        with:
+          native-options: --browser
+      - name: Reference, Rectangle click, wheel and localStorage reload
+        shell: bash
+        run: |
+          mkdir -p build/test-results
+          node scripts/browser test -- --size 1280,800 --click 603,723 --stored studio 2>&1 | tee build/test-results/browser.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-browser
+          path: build/test-results
+          retention-days: 14
