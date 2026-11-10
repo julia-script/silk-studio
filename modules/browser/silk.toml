@@ -5,15 +5,15 @@ silk-version = "0.1.0-dev.64+8214c402307b"
 
 [dependencies]
 studio = { path = "../editor", package = "silk-studio-native" }
-ui_app = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/app", package = "ui-app" }
-ui_app_window = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/app/window", package = "ui-app-window" }
-ui_tree_window = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/tree/window", package = "ui-tree-window" }
-ui_inspect_server = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/inspect/server", package = "ui-inspect-server" }
-ui_tree = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/tree", package = "ui-tree" }
-ui_fixtures = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/tree/fixtures", package = "ui-tree-fixtures" }
-ui_scene = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "816162323e5a08dc4fc7967801ad075b5a305911", path = "modules/ui_scene", package = "graphics-ui-scene" }
-atlas = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "816162323e5a08dc4fc7967801ad075b5a305911", path = "modules/atlas", package = "graphics-atlas" }
-vector = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "816162323e5a08dc4fc7967801ad075b5a305911", path = "modules/vector", package = "graphics-vector" }
-window = { git = "https://github.com/silk-lang/lib-native.git", rev = "4779eb00a9fcc4a1006ba254d498fdc75498b66d", path = "modules/platform/window", package = "platform-window" }
-webgpu = { git = "https://github.com/silk-lang/lib-native.git", rev = "4779eb00a9fcc4a1006ba254d498fdc75498b66d", path = "modules/gpu/webgpu", package = "gpu-webgpu" }
-webgpu_sys = { git = "https://github.com/silk-lang/lib-native.git", rev = "4779eb00a9fcc4a1006ba254d498fdc75498b66d", path = "modules/gpu/webgpu/sys", package = "gpu-webgpu-sys" }
+ui_app = { git = "https://github.com/silk-lang/lib-ui.git", rev = "7f0b544ec662c1ebeaf212a5b2de453be0dd2ae5", path = "modules/app", package = "ui-app" }
+ui_app_window = { git = "https://github.com/silk-lang/lib-ui.git", rev = "7f0b544ec662c1ebeaf212a5b2de453be0dd2ae5", path = "modules/app/window", package = "ui-app-window" }
+ui_tree_window = { git = "https://github.com/silk-lang/lib-ui.git", rev = "7f0b544ec662c1ebeaf212a5b2de453be0dd2ae5", path = "modules/tree/window", package = "ui-tree-window" }
+ui_inspect_server = { git = "https://github.com/silk-lang/lib-ui.git", rev = "7f0b544ec662c1ebeaf212a5b2de453be0dd2ae5", path = "modules/inspect/server", package = "ui-inspect-server" }
+ui_tree = { git = "https://github.com/silk-lang/lib-ui.git", rev = "7f0b544ec662c1ebeaf212a5b2de453be0dd2ae5", path = "modules/tree", package = "ui-tree" }
+ui_fixtures = { git = "https://github.com/silk-lang/lib-ui.git", rev = "7f0b544ec662c1ebeaf212a5b2de453be0dd2ae5", path = "modules/tree/fixtures", package = "ui-tree-fixtures" }
+ui_scene = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "1abcea13ffb39947c7375c196fc6e66b604ba741", path = "modules/ui_scene", package = "graphics-ui-scene" }
+atlas = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "1abcea13ffb39947c7375c196fc6e66b604ba741", path = "modules/atlas", package = "graphics-atlas" }
+vector = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "1abcea13ffb39947c7375c196fc6e66b604ba741", path = "modules/vector", package = "graphics-vector" }
+window = { git = "https://github.com/silk-lang/lib-native.git", rev = "786d0cbb9e359eae2cad2523c9e093cf72021ec9", path = "modules/platform/window", package = "platform-window" }
+webgpu = { git = "https://github.com/silk-lang/lib-native.git", rev = "786d0cbb9e359eae2cad2523c9e093cf72021ec9", path = "modules/gpu/webgpu", package = "gpu-webgpu" }
+webgpu_sys = { git = "https://github.com/silk-lang/lib-native.git", rev = "786d0cbb9e359eae2cad2523c9e093cf72021ec9", path = "modules/gpu/webgpu/sys", package = "gpu-webgpu-sys" }
