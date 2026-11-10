@@ -17,14 +17,13 @@ import ui_tree.engine { UiTree }
 import ui_tree.node { NONE }
 import ui_tree.mutation { NodeKind, LISTEN_CLICK, LISTEN_POINTER_DOWN, NOT_FOCUSABLE }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
-import ui_app.heap { Heap }
+import ui_app.heap { Heap, allocate }
 import ui_app.ui { Ui, Reply }
 import ui_components.lib {
   Theme,
   rgb,
   rgba,
   border,
-  corners,
   spacer,
   visibleRows,
   selectControl,
@@ -34,26 +33,24 @@ import ui_components.lib {
 }
 import ui_tree.node { EventKind }
 import ui_tree.input { MOD_CONTROL, MOD_META, MOD_SHIFT }
+import ui_tree.css
+import ui_tree.css { px, percent, auto, Keyword, Declaration }
 import ui_tree.mutation {
-  Property,
-  Length,
   Position,
-  Side,
   Align,
   Overflow,
   BoxSizing,
   Cursor,
   WhiteSpace,
   Role,
-  Display,
   FlexDirection,
   BorderStyle,
   BoxShadow,
   FontStyle,
-  LineHeight,
   TextAlign
 }
 import silk.collections.list { List }
+import silk.core.option { Option }
 import silk.text.string { String }
 import silk.num.f32
 import silk.num.u32
@@ -119,19 +116,19 @@ fn iconButton(
           },
         },
       )
-      ui.width(Length.px(28.0))
-      ui.height(Length.px(28.0))
+      ui.width(px(28.0))
+      ui.height(px(28.0))
       ui.style(
         &[
-          Property.Display { value: Display.Flex },
-          Property.FlexDirection { value: FlexDirection.Row },
-          Property.BoxSizing { value: BoxSizing.BorderBox },
-          Property.AlignItems { value: Align.Center },
-          Property.JustifyContent { value: Align.Center },
-          Property.BorderRadius { value: corners(5.0) },
+          css.display(Keyword.Flex),
+          css.flexDirection(FlexDirection.Row),
+          css.boxSizing(BoxSizing.BorderBox),
+          css.alignItems(Align.Center),
+          css.justifyContent(Align.Center),
+          css.borderRadius(px(5.0)),
         ],
       )
-      ui.hover(&[Property.BackgroundColor { color: sceneColor.rgb(0xeaf0e3) }])
+      ui.hover(&[css.backgroundColor(sceneColor.rgb(0xeaf0e3))])
       ui.color(rgb(0x747d70))
       glyph(&mut ui, icon, 18.0)
     },
@@ -142,23 +139,17 @@ fn glyph(ui: &mut Ui<Message>, resource: u32, size: f32) -> () {
   ui.box(
     |ui| {
       ui.fontSize(size)
-      ui.style(&[Property.LineHeight { value: LineHeight.Px { value: size } }])
-      ui.width(Length.px(size))
-      ui.height(Length.px(size))
-      ui.style(&[Property.FlexShrink { value: 0.0 }])
+      ui.style(&[css.lineHeight(px(size))])
+      ui.width(px(size))
+      ui.height(px(size))
+      ui.style(&[css.flexShrink(0.0)])
       ui.icon(resource)
     },
   )
 }
 
-fn line(ui: &mut Ui<Message>, side: Side) -> () {
-  ui.style(
-    &[
-      Property.BorderWidth { side: side, value: 1.0 },
-      Property.BorderStyle { value: BorderStyle.Solid },
-      Property.BorderColor { color: rgb(0xe8ebe3) },
-    ],
-  )
+fn line(ui: &mut Ui<Message>, width: Declaration) -> () {
+  ui.style(&[move width, css.borderStyle(BorderStyle.Solid), css.borderColor(rgb(0xe8ebe3))])
 }
 
 fn section(ui: &mut Ui<Message>, t: &Theme, name: string) -> () {
@@ -166,10 +157,10 @@ fn section(ui: &mut Ui<Message>, t: &Theme, name: string) -> () {
     |ui| {
       ui.fontSize(10.0)
       if name == "Dimensions" || name == "Fill" {
-        ui.style(&[Property.Margin { side: Side.Top, value: Length.px(6.0) }])
+        ui.style(&[css.marginTop(px(6.0))])
       }
       ui.color(rgb(0x626e5b))
-      ui.style(&[Property.FontWeight { value: 650.0 }])
+      ui.style(&[css.fontWeight(650.0)])
       ui.text(name)
     },
   )
@@ -185,14 +176,8 @@ fn panelSection(
     |ui| {
       ui.padding(15.0)
       ui.gap(10.0)
-      ui.style(
-        &[
-          Property.Padding { side: Side.Top, value: Length.px(17.0) },
-          Property.Padding { side: Side.Bottom, value: Length.px(17.0) },
-          Property.FlexShrink { value: 0.0 },
-        ],
-      )
-      line(&mut ui, Side.Bottom)
+      ui.style(&[css.paddingTop(px(17.0)), css.paddingBottom(px(17.0)), css.flexShrink(0.0)])
+      line(&mut ui, css.borderBottomWidth(px(1.0)))
       if title != "" {
         section(&mut ui, t, title)
       }
@@ -206,7 +191,7 @@ fn hint(ui: &mut Ui<Message>, text: string) -> () {
     |ui| {
       ui.fontSize(9.0)
       ui.color(rgb(0x97a08f))
-      ui.style(&[Property.LineHeight { value: LineHeight.Number { value: 1.6 } }])
+      ui.style(&[css.lineHeight(css.number(1.6))])
       ui.text(text)
     },
   )
@@ -224,22 +209,22 @@ fn item(
     || Message.Action { code: code },
     |ui| {
       ui.label(title)
-      ui.height(Length.px(33.0))
+      ui.height(px(33.0))
       ui.style(
         &[
-          Property.Display { value: Display.Flex },
-          Property.FlexDirection { value: FlexDirection.Row },
-          Property.AlignItems { value: Align.Center },
-          Property.BoxSizing { value: BoxSizing.BorderBox },
-          Property.FlexShrink { value: 0.0 },
-          Property.BorderRadius { value: corners(5.0) },
+          css.display(Keyword.Flex),
+          css.flexDirection(FlexDirection.Row),
+          css.alignItems(Align.Center),
+          css.boxSizing(BoxSizing.BorderBox),
+          css.flexShrink(0.0),
+          css.borderRadius(px(5.0)),
         ],
       )
       ui.padding(8.0)
       ui.gap(8.0)
       ui.fontSize(11.0)
       ui.color(rgb(0x65765a))
-      ui.hover(&[Property.BackgroundColor { color: rgb(0xedf2e5) }])
+      ui.hover(&[css.backgroundColor(rgb(0xedf2e5))])
       glyph(&mut ui, icon, 14.0)
       ui.text(title)
       spacer(&mut ui)
@@ -262,12 +247,12 @@ fn setting(
       ui.label(title)
       ui.accessRole(Role.Switch)
       ui.checked(enabled)
-      ui.height(Length.px(28.0))
+      ui.height(px(28.0))
       ui.style(
         &[
-          Property.Display { value: Display.Flex },
-          Property.FlexDirection { value: FlexDirection.Row },
-          Property.AlignItems { value: Align.Center },
+          css.display(Keyword.Flex),
+          css.flexDirection(FlexDirection.Row),
+          css.alignItems(Align.Center),
         ],
       )
       ui.gap(8.0)
@@ -278,8 +263,8 @@ fn setting(
       spacer(&mut ui)
       ui.box(
         |ui| {
-          ui.width(Length.px(25.0))
-          ui.height(Length.px(14.0))
+          ui.width(px(25.0))
+          ui.height(px(14.0))
           ui.background(
             if enabled {
               rgb(0x728c5e)
@@ -287,12 +272,7 @@ fn setting(
               rgb(0xdfe4d8)
             },
           )
-          ui.style(
-            &[
-              Property.Position { value: Position.Relative },
-              Property.BorderRadius { value: corners(20.0) },
-            ],
-          )
+          ui.style(&[css.position(Position.Relative), css.borderRadius(px(20.0))])
           ui.box(
             |ui| {
               place(
@@ -307,7 +287,7 @@ fn setting(
                 10.0,
               )
               ui.background(rgb(0xffffff))
-              ui.style(&[Property.BorderRadius { value: corners(10.0) }])
+              ui.style(&[css.borderRadius(px(10.0))])
             },
           )
         },
@@ -319,12 +299,12 @@ fn setting(
 fn place(ui: &mut Ui<Message>, x: f32, y: f32, w: f32, h: f32) -> () {
   ui.style(
     &[
-      Property.Position { value: Position.Absolute },
-      Property.Inset { side: Side.Left, value: Length.px(x) },
-      Property.Inset { side: Side.Top, value: Length.px(y) },
-      Property.Width { value: Length.px(w) },
-      Property.Height { value: Length.px(h) },
-      Property.BoxSizing { value: BoxSizing.BorderBox },
+      css.position(Position.Absolute),
+      css.left(px(x)),
+      css.top(px(y)),
+      css.width(px(w)),
+      css.height(px(h)),
+      css.boxSizing(BoxSizing.BorderBox),
     ],
   )
 }
@@ -334,19 +314,14 @@ fn button(ui: &mut Ui<Message>, t: &Theme, label: string, code: u32) -> () {
     || Message.Action { code: code },
     |ui| {
       ui.label(label)
-      ui.width(Length.percent(100.0))
-      ui.style(&[Property.BoxSizing { value: BoxSizing.BorderBox }])
+      ui.width(percent(100.0))
+      ui.style(&[css.boxSizing(BoxSizing.BorderBox)])
       ui.padding(6.0)
       ui.fontSize(10.0)
       ui.color(rgb(0x6a775d))
-      ui.style(
-        &[
-          Property.Display { value: Display.Flex },
-          Property.JustifyContent { value: Align.Center },
-        ],
-      )
+      ui.style(&[css.display(Keyword.Flex), css.justifyContent(Align.Center)])
       border(&mut ui, 1.0, rgb(0xe0e6d7), 5.0)
-      ui.hover(&[Property.BackgroundColor { color: rgb(0xeef2e6) }])
+      ui.hover(&[css.backgroundColor(rgb(0xeef2e6))])
       ui.text(label)
     },
   )
@@ -363,7 +338,7 @@ fn field(
   ui.row(
     |ui| {
       ui.height(
-        Length.px(
+        px(
           if key == 19 {
             31.0
           } else {
@@ -372,15 +347,10 @@ fn field(
         ),
       )
       if key == 19 {
-        ui.style(&[Property.Margin { side: Side.Bottom, value: Length.px(8.0) }])
+        ui.style(&[css.marginBottom(px(8.0))])
       }
-      ui.width(Length.percent(100.0))
-      ui.style(
-        &[
-          Property.AlignItems { value: Align.Center },
-          Property.BoxSizing { value: BoxSizing.BorderBox },
-        ],
-      )
+      ui.width(percent(100.0))
+      ui.style(&[css.alignItems(Align.Center), css.boxSizing(BoxSizing.BorderBox)])
       ui.gap(6.0)
       ui.padding(6.0)
       border(&mut ui, 1.0, t.border, 5.0)
@@ -423,12 +393,7 @@ fn field(
           ui.label(label)
           ui.testId(label)
           ui.grow(1.0)
-          ui.style(
-            &[
-              Property.MinWidth { value: Length.px(0.0) },
-              Property.BoxSizing { value: BoxSizing.BorderBox },
-            ],
-          )
+          ui.style(&[css.minWidth(px(0.0)), css.boxSizing(BoxSizing.BorderBox)])
           ui.fontSize(11.0)
           ui.onInput(|v| Message.Draft { field: key, value: move v })
           ui.onEnter(|| Message.Commit)
@@ -449,17 +414,12 @@ fn number(ui: &mut Ui<Message>, t: &Theme, m: &Studio, label: string, key: u32, 
   }
   ui.row(
     |ui| {
-      ui.height(Length.px(30.0))
+      ui.height(px(30.0))
       ui.padding(6.0)
       ui.gap(6.0)
       border(&mut ui, 1.0, t.border, 5.0)
       ui.background(rgb(0xf5f6f1))
-      ui.style(
-        &[
-          Property.AlignItems { value: Align.Center },
-          Property.BoxSizing { value: BoxSizing.BorderBox },
-        ],
-      )
+      ui.style(&[css.alignItems(Align.Center), css.boxSizing(BoxSizing.BorderBox)])
       ui.fontSize(9.0)
       ui.text(label)
       numberInput(
@@ -472,7 +432,7 @@ fn number(ui: &mut Ui<Message>, t: &Theme, m: &Studio, label: string, key: u32, 
           ui.testId(label)
           ui.grow(1.0)
           ui.fontSize(11.0)
-          ui.style(&[Property.MinWidth { value: Length.px(0.0) }])
+          ui.style(&[css.minWidth(px(0.0))])
 
           // numberInput answers Enter, Escape and the arrows first; every other key edits the
           // field, so it must not reach the canvas shortcuts (Primary+A, Backspace) on the root.
@@ -486,15 +446,10 @@ fn number(ui: &mut Ui<Message>, t: &Theme, m: &Studio, label: string, key: u32, 
 fn color(ui: &mut Ui<Message>, t: &Theme, m: &Studio, label: string, key: u32, value: u32) -> () {
   ui.row(
     |ui| {
-      ui.height(Length.px(32.0))
+      ui.height(px(32.0))
       ui.padding(5.0)
       ui.gap(6.0)
-      ui.style(
-        &[
-          Property.AlignItems { value: Align.Center },
-          Property.BoxSizing { value: BoxSizing.BorderBox },
-        ],
-      )
+      ui.style(&[css.alignItems(Align.Center), css.boxSizing(BoxSizing.BorderBox)])
       border(&mut ui, 1.0, rgb(0xe8ebe2), 5.0)
       ui.pressable(
         || Message.ColorOpen { field: key, value: value },
@@ -502,9 +457,9 @@ fn color(ui: &mut Ui<Message>, t: &Theme, m: &Studio, label: string, key: u32, v
           let mut title = ui.alloc(String.copy(label))
           ui.alloc(title.append(" color"))
           ui.label(String.view(&title))
-          ui.width(Length.px(20.0))
-          ui.height(Length.px(20.0))
-          ui.style(&[Property.FlexShrink { value: 0.0 }])
+          ui.width(px(20.0))
+          ui.height(px(20.0))
+          ui.style(&[css.flexShrink(0.0)])
           ui.background(sceneColor.rgba(value))
           border(&mut ui, 1.0, rgba(0x000000, 0.07), 4.0)
         },
@@ -521,7 +476,7 @@ fn color(ui: &mut Ui<Message>, t: &Theme, m: &Studio, label: string, key: u32, v
           ui.label(label)
           ui.testId(label)
           ui.grow(1.0)
-          ui.style(&[Property.MinWidth { value: Length.px(0.0) }])
+          ui.style(&[css.minWidth(px(0.0))])
           ui.fontSize(11.0)
           ui.onInput(|v| Message.Draft { field: key, value: move v })
           ui.onEnter(|| Message.Commit)
@@ -549,12 +504,7 @@ fn colorPicker(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
     |ui| {
       ui.color(t.text)
       ui.fontSize(12.0)
-      ui.style(
-        &[
-          Property.FontFamily { family: 1 },
-          Property.LineHeight { value: LineHeight.Number { value: 1.5 } },
-        ],
-      )
+      ui.style(&[css.fontFamily(1), css.lineHeight(css.number(1.5))])
       place(&mut ui, 0.0, 0.0, m.width, m.height)
       ui.onPointerDown(|event| Reply<Message>.EmitAndStop { message: Message.ColorClose })
       ui.column(
@@ -635,19 +585,17 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
   ui.row(
     |ui| {
       ui.testId("window-header")
-      ui.width(Length.percent(100.0))
-      ui.height(Length.px(56.0))
-      ui.style(
-        &[Property.FlexShrink { value: 0.0 }, Property.BoxSizing { value: BoxSizing.BorderBox }],
-      )
+      ui.width(percent(100.0))
+      ui.height(px(56.0))
+      ui.style(&[css.flexShrink(0.0), css.boxSizing(BoxSizing.BorderBox)])
       ui.padding(12.0)
       static if Intrinsic.targetOperatingSystem() == "darwin" {
-        ui.style(&[Property.Padding { side: Side.Left, value: Length.px(92.0) }])
+        ui.style(&[css.paddingLeft(px(92.0))])
       }
       ui.gap(9.0)
-      ui.style(&[Property.AlignItems { value: Align.Center }])
+      ui.style(&[css.alignItems(Align.Center)])
       ui.background(t.surface)
-      line(&mut ui, Side.Bottom)
+      line(&mut ui, css.borderBottomWidth(px(1.0)))
       ui.pressable(
         || Message.Action { code: 17 },
         |ui| {
@@ -660,16 +608,16 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             EventKind.Focus,
             |event| Reply<Message>.Emit { message: Message.FocusReturned { action: 17 } },
           )
-          ui.width(Length.px(28.0))
-          ui.height(Length.px(28.0))
+          ui.width(px(28.0))
+          ui.height(px(28.0))
           ui.style(
             &[
-              Property.Display { value: Display.Flex },
-              Property.AlignItems { value: Align.Center },
-              Property.JustifyContent { value: Align.Center },
-              Property.BorderRadius { value: corners(8.0) },
-              Property.FontFamily { family: 3 },
-              Property.FontStyle { value: FontStyle.Italic },
+              css.display(Keyword.Flex),
+              css.alignItems(Align.Center),
+              css.justifyContent(Align.Center),
+              css.borderRadius(px(8.0)),
+              css.fontFamily(3),
+              css.fontStyle(FontStyle.Italic),
             ],
           )
           ui.background(t.accent)
@@ -683,13 +631,13 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
           |ui| {
             ui.gap(3.0)
             ui.fontSize(14.0)
-            ui.style(&[Property.FontWeight { value: 650.0 }])
+            ui.style(&[css.fontWeight(650.0)])
             ui.text("silk")
             if m.width > 1100.0 {
               ui.box(
                 |ui| {
                   ui.color(rgb(0x90988b))
-                  ui.style(&[Property.FontWeight { value: 400.0 }])
+                  ui.style(&[css.fontWeight(400.0)])
                   ui.text("studio")
                 },
               )
@@ -699,14 +647,14 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
       }
       ui.box(
         |ui| {
-          ui.width(Length.px(19.0))
-          ui.height(Length.px(18.0))
-          ui.style(&[Property.BoxSizing { value: BoxSizing.BorderBox }])
-          ui.style(&[Property.Padding { side: Side.Left, value: Length.px(9.0) }])
+          ui.width(px(19.0))
+          ui.height(px(18.0))
+          ui.style(&[css.boxSizing(BoxSizing.BorderBox)])
+          ui.style(&[css.paddingLeft(px(9.0))])
           ui.box(
             |ui| {
-              ui.width(Length.px(1.0))
-              ui.height(Length.px(18.0))
+              ui.width(px(1.0))
+              ui.height(px(18.0))
               ui.background(t.border)
             },
           )
@@ -721,10 +669,10 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         |ui| {
           ui.accessRole(Role.TextBox)
           ui.label("Document name")
-          ui.width(Length.px(170.0))
-          ui.height(Length.px(30.0))
+          ui.width(px(170.0))
+          ui.height(px(30.0))
           ui.padding(7.0)
-          ui.style(&[Property.BoxSizing { value: BoxSizing.BorderBox }])
+          ui.style(&[css.boxSizing(BoxSizing.BorderBox)])
           ui.fontSize(12.0)
           ui.onInput(|v| Message.Draft { field: 18, value: move v })
           ui.onBlur(|| Message.Commit)
@@ -739,7 +687,7 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             ui.fontSize(8.0)
             ui.color(t.mutedText)
             ui.background(rgb(0xeef1e9))
-            ui.style(&[Property.BorderRadius { value: corners(3.0) }])
+            ui.style(&[css.borderRadius(px(3.0))])
             ui.text("LOCAL")
           },
         )
@@ -751,12 +699,7 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             ui.gap(5.0)
             ui.fontSize(10.0)
             ui.color(rgb(0x7e8977))
-            ui.style(
-              &[
-                Property.AlignItems { value: Align.Center },
-                Property.Padding { side: Side.Right, value: Length.px(12.0) },
-              ],
-            )
+            ui.style(&[css.alignItems(Align.Center), css.paddingRight(px(12.0))])
             glyph(&mut ui, icons.CHECK, 13.0)
             ui.text(
               if m.savedRevision == m.revision {
@@ -772,7 +715,7 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         |ui| {
           ui.disabled(m.past.length() == 0)
           if m.past.length() == 0 {
-            ui.style(&[Property.Opacity { value: 0.3 }])
+            ui.style(&[css.opacity(0.3)])
           }
           iconButton(&mut ui, t, m, icons.UNDO, "Undo", 0)
         },
@@ -781,15 +724,15 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         |ui| {
           ui.disabled(m.future.length() == 0)
           if m.future.length() == 0 {
-            ui.style(&[Property.Opacity { value: 0.3 }])
+            ui.style(&[css.opacity(0.3)])
           }
           iconButton(&mut ui, t, m, icons.REDO, "Redo", 1)
         },
       )
       ui.box(
         |ui| {
-          ui.width(Length.px(1.0))
-          ui.height(Length.px(18.0))
+          ui.width(px(1.0))
+          ui.height(px(18.0))
           ui.background(t.border)
         },
       )
@@ -798,16 +741,16 @@ fn header(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         || Message.Action { code: 15 },
         |ui| {
           ui.label("Export PNG")
-          ui.height(Length.px(31.0))
+          ui.height(px(31.0))
           ui.padding(9.0)
           ui.gap(8.0)
           ui.style(
             &[
-              Property.Display { value: Display.Flex },
-              Property.FlexDirection { value: FlexDirection.Row },
-              Property.AlignItems { value: Align.Center },
-              Property.BoxSizing { value: BoxSizing.BorderBox },
-              Property.BorderRadius { value: corners(6.0) },
+              css.display(Keyword.Flex),
+              css.flexDirection(FlexDirection.Row),
+              css.alignItems(Align.Center),
+              css.boxSizing(BoxSizing.BorderBox),
+              css.borderRadius(px(6.0)),
             ],
           )
           ui.fontSize(11.0)
@@ -841,17 +784,17 @@ fn layerList(
       ui.onLayout(|bounds| Message.LayerViewport { height: bounds.height() })
       ui.style(
         &[
-          Property.OverflowY { value: Overflow.Auto },
-          Property.OverflowX { value: Overflow.Hidden },
-          Property.FlexBasis { value: Length.px(0.0) },
-          Property.MinHeight { value: Length.px(0.0) },
+          css.overflowY(Overflow.Auto),
+          css.overflowX(Overflow.Hidden),
+          css.flexBasis(px(0.0)),
+          css.minHeight(px(0.0)),
         ],
       )
       ui.on(EventKind.Scroll, |event| Reply<Message>.Emit { message: onScroll(event.y) })
       ui.box(
         |ui| {
-          ui.height(Length.px(usize.toF32(window.first) * rowHeight))
-          ui.style(&[Property.FlexShrink { value: 0.0 }])
+          ui.height(px(usize.toF32(window.first) * rowHeight))
+          ui.style(&[css.flexShrink(0.0)])
         },
       )
       let mut index = window.first
@@ -860,10 +803,8 @@ fn layerList(
         ui.row(
           |ui| {
             ui.accessRole(Role.ListItem)
-            ui.height(Length.px(rowHeight))
-            ui.style(
-              &[Property.FlexShrink { value: 0.0 }, Property.AlignItems { value: Align.Center }],
-            )
+            ui.height(px(rowHeight))
+            ui.style(&[css.flexShrink(0.0), css.alignItems(Align.Center)])
             row(&mut ui, index)
           },
         )
@@ -871,8 +812,8 @@ fn layerList(
       }
       ui.box(
         |ui| {
-          ui.height(Length.px(usize.toF32(count - window.end) * rowHeight))
-          ui.style(&[Property.FlexShrink { value: 0.0 }])
+          ui.height(px(usize.toF32(count - window.end) * rowHeight))
+          ui.style(&[css.flexShrink(0.0)])
         },
       )
     },
@@ -882,29 +823,27 @@ fn layerList(
 fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
   ui.column(
     |ui| {
-      ui.width(Length.px(m.leftWidth()))
-      ui.height(Length.percent(100.0))
-      ui.style(
-        &[Property.FlexShrink { value: 0.0 }, Property.BoxSizing { value: BoxSizing.BorderBox }],
-      )
+      ui.width(px(m.leftWidth()))
+      ui.height(percent(100.0))
+      ui.style(&[css.flexShrink(0.0), css.boxSizing(BoxSizing.BorderBox)])
       ui.background(t.surface)
-      line(&mut ui, Side.Right)
+      line(&mut ui, css.borderRightWidth(px(1.0)))
       ui.fontSize(11.0)
       ui.row(
         |ui| {
-          ui.height(Length.px(48.0))
+          ui.height(px(48.0))
           ui.padding(12.0)
           ui.style(
             &[
-              Property.BoxSizing { value: BoxSizing.BorderBox },
-              Property.AlignItems { value: Align.Center },
-              Property.FlexShrink { value: 0.0 },
+              css.boxSizing(BoxSizing.BorderBox),
+              css.alignItems(Align.Center),
+              css.flexShrink(0.0),
             ],
           )
-          line(&mut ui, Side.Bottom)
+          line(&mut ui, css.borderBottomWidth(px(1.0)))
           ui.box(
             |ui| {
-              ui.style(&[Property.FontWeight { value: 650.0 }])
+              ui.style(&[css.fontWeight(650.0)])
               ui.text("Workspace")
             },
           )
@@ -917,18 +856,18 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
           ui.padding(10.0)
           ui.style(
             &[
-              Property.Padding { side: Side.Top, value: Length.px(14.0) },
-              Property.Padding { side: Side.Bottom, value: Length.px(12.0) },
-              Property.MaxHeight { value: Length.px(200.0) },
-              Property.OverflowY { value: Overflow.Auto },
-              Property.FlexShrink { value: 0.0 },
+              css.paddingTop(px(14.0)),
+              css.paddingBottom(px(12.0)),
+              css.maxHeight(px(200.0)),
+              css.overflowY(Overflow.Auto),
+              css.flexShrink(0.0),
             ],
           )
-          line(&mut ui, Side.Bottom)
+          line(&mut ui, css.borderBottomWidth(px(1.0)))
           ui.row(
             |ui| {
-              ui.height(Length.px(34.0))
-              ui.style(&[Property.AlignItems { value: Align.Center }])
+              ui.height(px(34.0))
+              ui.style(&[css.alignItems(Align.Center)])
               ui.box(
                 |ui| {
                   ui.padding(6.0)
@@ -946,15 +885,15 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
               ui.pressable(
                 || Message.Page { id: p.id },
                 |ui| {
-                  ui.height(Length.px(31.0))
+                  ui.height(px(31.0))
                   ui.padding(9.0)
                   ui.style(
                     &[
-                      Property.BoxSizing { value: BoxSizing.BorderBox },
-                      Property.Display { value: Display.Flex },
-                      Property.FlexDirection { value: FlexDirection.Row },
-                      Property.AlignItems { value: Align.Center },
-                      Property.BorderRadius { value: corners(5.0) },
+                      css.boxSizing(BoxSizing.BorderBox),
+                      css.display(Keyword.Flex),
+                      css.flexDirection(FlexDirection.Row),
+                      css.alignItems(Align.Center),
+                      css.borderRadius(px(5.0)),
                     ],
                   )
                   ui.gap(8.0)
@@ -979,13 +918,13 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
       )
       ui.row(
         |ui| {
-          ui.height(Length.px(44.0))
+          ui.height(px(44.0))
           ui.padding(12.0)
           ui.style(
             &[
-              Property.BoxSizing { value: BoxSizing.BorderBox },
-              Property.AlignItems { value: Align.Center },
-              Property.Padding { side: Side.Top, value: Length.px(18.0) },
+              css.boxSizing(BoxSizing.BorderBox),
+              css.alignItems(Align.Center),
+              css.paddingTop(px(18.0)),
             ],
           )
           section(&mut ui, t, "Layers")
@@ -1003,24 +942,14 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
       )
       ui.box(
         |ui| {
-          ui.height(Length.px(37.0))
-          ui.style(
-            &[
-              Property.Padding { side: Side.Left, value: Length.px(9.0) },
-              Property.Padding { side: Side.Right, value: Length.px(9.0) },
-            ],
-          )
+          ui.height(px(37.0))
+          ui.style(&[css.paddingLeft(px(9.0)), css.paddingRight(px(9.0))])
           ui.row(
             |ui| {
-              ui.height(Length.px(28.0))
+              ui.height(px(28.0))
               ui.padding(6.0)
               ui.gap(6.0)
-              ui.style(
-                &[
-                  Property.BoxSizing { value: BoxSizing.BorderBox },
-                  Property.AlignItems { value: Align.Center },
-                ],
-              )
+              ui.style(&[css.boxSizing(BoxSizing.BorderBox), css.alignItems(Align.Center)])
               border(&mut ui, 1.0, rgb(0xe7eae1), 5.0)
               ui.color(rgb(0x929b89))
               glyph(&mut ui, icons.SEARCH, 14.0)
@@ -1030,7 +959,7 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                   ui.accessRole(Role.TextBox)
                   ui.grow(1.0)
                   ui.fontSize(10.0)
-                  ui.style(&[Property.MinWidth { value: Length.px(0.0) }])
+                  ui.style(&[css.minWidth(px(0.0))])
                   ui.placeholder("Find a layer…")
                   ui.label("Find a layer")
                   ui.onInput(|v| Message.Search { value: move v })
@@ -1056,7 +985,7 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         ui.box(
           |ui| {
             ui.padding(16.0)
-            ui.height(Length.px(50.0))
+            ui.height(px(50.0))
             hint(
               &mut ui,
               if String.byteLength(String.view(&m.search)) > 0 {
@@ -1085,21 +1014,21 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
               ui.accessRole(Role.Button)
               ui.tabIndex(0)
               ui.cursor(Cursor.Pointer)
-              ui.width(Length.percent(100.0))
-              ui.height(Length.px(32.0))
+              ui.width(percent(100.0))
+              ui.height(px(32.0))
               ui.padding(0.0)
               ui.style(
                 &[
-                  Property.BoxSizing { value: BoxSizing.BorderBox },
-                  Property.BorderRadius { value: corners(0.0) },
-                  Property.WhiteSpace { value: WhiteSpace.NoWrap },
-                  Property.OverflowX { value: Overflow.Hidden },
+                  css.boxSizing(BoxSizing.BorderBox),
+                  css.borderRadius(px(0.0)),
+                  css.whiteSpace(WhiteSpace.NoWrap),
+                  css.overflowX(Overflow.Hidden),
                 ],
               )
               if e.selected {
                 ui.background(t.highlight)
               }
-              ui.hover(&[Property.BackgroundColor { color: rgb(0xf1f3ee) }])
+              ui.hover(&[css.backgroundColor(rgb(0xf1f3ee))])
               ui.label(m.string(e.name))
               ui.selected(e.selected)
               ui.on(
@@ -1121,11 +1050,8 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                   ui.gap(0.0)
                   ui.style(
                     &[
-                      Property.AlignItems { value: Align.Center },
-                      Property.Padding {
-                        side: Side.Left,
-                        value: Length.px(8.0 + f32.min(6.0, u32.toF32(row.depth)) * 12.0),
-                      },
+                      css.alignItems(Align.Center),
+                      css.paddingLeft(px(8.0 + f32.min(6.0, u32.toF32(row.depth)) * 12.0)),
                     ],
                   )
                   if row.children {
@@ -1147,14 +1073,9 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                             "Collapse layer"
                           },
                         )
-                        ui.width(Length.px(12.0))
-                        ui.height(Length.px(22.0))
-                        ui.style(
-                          &[
-                            Property.Display { value: Display.Flex },
-                            Property.AlignItems { value: Align.Center },
-                          ],
-                        )
+                        ui.width(px(12.0))
+                        ui.height(px(22.0))
+                        ui.style(&[css.display(Keyword.Flex), css.alignItems(Align.Center)])
                         ui.icon(
                           if layers.collapsed(m, e.id) {
                             icons.CHEVRON
@@ -1167,14 +1088,14 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                   } else {
                     ui.box(
                       |ui| {
-                        ui.width(Length.px(9.0))
+                        ui.width(px(9.0))
                       },
                     )
                   }
                   ui.box(
                     |ui| {
-                      ui.width(Length.px(20.0))
-                      ui.style(&[Property.FlexShrink { value: 0.0 }])
+                      ui.width(px(20.0))
+                      ui.style(&[css.flexShrink(0.0)])
                       ui.color(rgb(0x8a957f))
                       glyph(
                         &mut ui,
@@ -1196,12 +1117,7 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                   ui.box(
                     |ui| {
                       ui.grow(1.0)
-                      ui.style(
-                        &[
-                          Property.MinWidth { value: Length.px(0.0) },
-                          Property.OverflowX { value: Overflow.Hidden },
-                        ],
-                      )
+                      ui.style(&[css.minWidth(px(0.0)), css.overflowX(Overflow.Hidden)])
                       ui.fontSize(11.0)
                       ui.color(t.text)
                       ui.text(m.string(e.name))
@@ -1239,9 +1155,9 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                         )
                         ui.alloc(label.append(m.string(e.name)))
                         ui.label(String.view(&label))
-                        ui.width(Length.px(20.0))
-                        ui.height(Length.px(22.0))
-                        ui.style(&[Property.FlexShrink { value: 0.0 }])
+                        ui.width(px(20.0))
+                        ui.height(px(22.0))
+                        ui.style(&[css.flexShrink(0.0)])
                         ui.on(
                           EventKind.Click,
                           |event| Reply<Message>.EmitAndStop {
@@ -1250,16 +1166,16 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                         )
                         ui.style(
                           &[
-                            Property.Opacity {
-                              value: if m.hoveredLayer == e.id || active {
+                            css.opacity(
+                              if m.hoveredLayer == e.id || active {
                                 1.0
                               } else {
                                 0.0
                               },
-                            },
+                            ),
                           ],
                         )
-                        ui.focused(&[Property.Opacity { value: 1.0 }])
+                        ui.focused(&[css.opacity(1.0)])
                         glyph(
                           &mut ui,
                           if bit == 2 {
@@ -1282,16 +1198,16 @@ fn sidebar(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
 
       ui.row(
         |ui| {
-          ui.height(Length.px(44.0))
+          ui.height(px(44.0))
           ui.padding(12.0)
           ui.style(
             &[
-              Property.BoxSizing { value: BoxSizing.BorderBox },
-              Property.AlignItems { value: Align.Center },
-              Property.FlexShrink { value: 0.0 },
+              css.boxSizing(BoxSizing.BorderBox),
+              css.alignItems(Align.Center),
+              css.flexShrink(0.0),
             ],
           )
-          line(&mut ui, Side.Top)
+          line(&mut ui, css.borderTopWidth(px(1.0)))
           ui.fontSize(8.0)
           ui.color(rgb(0xa3ab9c))
           ui.text("YOUR SPACE TO MAKE.")
@@ -1311,13 +1227,13 @@ fn pair(ui: &mut Ui<Message>, body: fn(&mut Ui<Message>, bool) -> ()) -> () {
       ui.gap(8.0)
       ui.box(
         |ui| {
-          ui.style(&[Property.MinWidth { value: Length.px(0.0) }])
+          ui.style(&[css.minWidth(px(0.0))])
           body(&mut ui, false)
         },
       )
       ui.box(
         |ui| {
-          ui.style(&[Property.MinWidth { value: Length.px(0.0) }])
+          ui.style(&[css.minWidth(px(0.0))])
           body(&mut ui, true)
         },
       )
@@ -1328,29 +1244,27 @@ fn pair(ui: &mut Ui<Message>, body: fn(&mut Ui<Message>, bool) -> ()) -> () {
 fn inspector(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
   ui.column(
     |ui| {
-      ui.width(Length.px(m.rightWidth()))
-      ui.height(Length.percent(100.0))
-      ui.style(
-        &[Property.FlexShrink { value: 0.0 }, Property.BoxSizing { value: BoxSizing.BorderBox }],
-      )
+      ui.width(px(m.rightWidth()))
+      ui.height(percent(100.0))
+      ui.style(&[css.flexShrink(0.0), css.boxSizing(BoxSizing.BorderBox)])
       ui.background(t.surface)
-      line(&mut ui, Side.Left)
+      line(&mut ui, css.borderLeftWidth(px(1.0)))
       ui.row(
         |ui| {
-          ui.height(Length.px(48.0))
+          ui.height(px(48.0))
           ui.padding(12.0)
           ui.style(
             &[
-              Property.BoxSizing { value: BoxSizing.BorderBox },
-              Property.AlignItems { value: Align.Center },
-              Property.FlexShrink { value: 0.0 },
+              css.boxSizing(BoxSizing.BorderBox),
+              css.alignItems(Align.Center),
+              css.flexShrink(0.0),
             ],
           )
-          line(&mut ui, Side.Bottom)
+          line(&mut ui, css.borderBottomWidth(px(1.0)))
           ui.fontSize(11.0)
           ui.box(
             |ui| {
-              ui.style(&[Property.FontWeight { value: 650.0 }])
+              ui.style(&[css.fontWeight(650.0)])
               ui.text("Design")
             },
           )
@@ -1386,11 +1300,7 @@ fn inspector(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         |ui| {
           ui.grow(1.0)
           ui.style(
-            &[
-              Property.MinHeight { value: Length.px(0.0) },
-              Property.OverflowY { value: Overflow.Auto },
-              Property.OverflowX { value: Overflow.Hidden },
-            ],
+            &[css.minHeight(px(0.0)), css.overflowY(Overflow.Auto), css.overflowX(Overflow.Hidden)],
           )
           if m.selected == 0 {
             panelSection(
@@ -1426,48 +1336,34 @@ fn inspector(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                 ui.padding(25.0)
                 ui.gap(0.0)
                 ui.style(
-                  &[
-                    Property.Padding { side: Side.Top, value: Length.px(32.0) },
-                    Property.Padding { side: Side.Bottom, value: Length.px(32.0) },
-                    Property.FlexShrink { value: 0.0 },
-                  ],
+                  &[css.paddingTop(px(32.0)), css.paddingBottom(px(32.0)), css.flexShrink(0.0)],
                 )
                 ui.box(
                   |ui| {
                     ui.fontSize(36.0)
                     ui.color(rgb(0xa3b48b))
-                    ui.height(Length.px(54.0))
-                    ui.style(&[Property.Margin { side: Side.Bottom, value: Length.px(17.0) }])
-                    ui.style(
-                      &[
-                        Property.Display { value: Display.Flex },
-                        Property.AlignItems { value: Align.Center },
-                      ],
-                    )
+                    ui.height(px(54.0))
+                    ui.style(&[css.marginBottom(px(17.0))])
+                    ui.style(&[css.display(Keyword.Flex), css.alignItems(Align.Center)])
                     glyph(&mut ui, icons.SPARK, 28.0)
                   },
                 )
                 ui.box(
                   |ui| {
-                    ui.style(
-                      &[
-                        Property.FontFamily { family: 3 },
-                        Property.LineHeight { value: LineHeight.Number { value: 1.2 } },
-                      ],
-                    )
+                    ui.style(&[css.fontFamily(3), css.lineHeight(css.number(1.2))])
                     ui.fontSize(25.0)
                     ui.color(rgb(0x506345))
-                    ui.style(&[Property.WhiteSpace { value: WhiteSpace.PreWrap }])
+                    ui.style(&[css.whiteSpace(WhiteSpace.PreWrap)])
                     ui.text("A space for\nyour next idea.")
                   },
                 )
                 ui.box(
                   |ui| {
-                    ui.style(&[Property.Margin { side: Side.Top, value: Length.px(14.0) }])
+                    ui.style(&[css.marginTop(px(14.0))])
                     ui.fontSize(11.0)
                     ui.color(rgb(0x96a18c))
-                    ui.style(&[Property.LineHeight { value: LineHeight.Number { value: 1.8 } }])
-                    ui.style(&[Property.WhiteSpace { value: WhiteSpace.PreWrap }])
+                    ui.style(&[css.lineHeight(css.number(1.8))])
+                    ui.style(&[css.whiteSpace(WhiteSpace.PreWrap)])
                     ui.text(
                       "Draw a shape, set some type, and make it yours. Everything stays on this device.",
                     )
@@ -1478,12 +1374,7 @@ fn inspector(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                   |ui| {
                     ui.fontSize(10.0)
                     ui.color(rgb(0x70865c))
-                    ui.style(
-                      &[
-                        Property.Margin { side: Side.Top, value: Length.px(18.0) },
-                        Property.FontWeight { value: 600.0 },
-                      ],
-                    )
+                    ui.style(&[css.marginTop(px(18.0)), css.fontWeight(600.0)])
                     ui.text("Find your flow  ↗")
                   },
                 )
@@ -1518,12 +1409,7 @@ fn inspector(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                     |ui| {
                       ui.gap(8.0)
                       ui.fontSize(11.0)
-                      ui.style(
-                        &[
-                          Property.AlignItems { value: Align.Center },
-                          Property.FontWeight { value: 600.0 },
-                        ],
-                      )
+                      ui.style(&[css.alignItems(Align.Center), css.fontWeight(600.0)])
                       glyph(
                         &mut ui,
                         if e.kind == 2 {
@@ -1545,10 +1431,10 @@ fn inspector(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                   field(&mut ui, t, m, "Layer name", 17, m.string(e.name))
                   ui.row(
                     |ui| {
-                      ui.style(&[Property.JustifyContent { value: Align.SpaceBetween }])
+                      ui.style(&[css.justifyContent(Align.SpaceBetween)])
                       ui.disabled(m.selected < 2)
                       if m.selected < 2 {
-                        ui.style(&[Property.Opacity { value: 0.3 }])
+                        ui.style(&[css.opacity(0.3)])
                       }
                       iconButton(&mut ui, t, m, icons.LEFT, "Align left", 25)
                       iconButton(&mut ui, t, m, icons.CENTER, "Align center", 26)
@@ -1673,9 +1559,9 @@ fn inspector(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                             |ui| {
                               let name = ui.alloc(format.hex(value))
                               ui.label(String.view(&name))
-                              ui.style(&[Property.BoxSizing { value: BoxSizing.BorderBox }])
-                              ui.width(Length.px(21.0))
-                              ui.height(Length.px(21.0))
+                              ui.style(&[css.boxSizing(BoxSizing.BorderBox)])
+                              ui.width(px(21.0))
+                              ui.height(px(21.0))
                               ui.background(sceneColor.rgba(value))
                               border(&mut ui, 1.0, sceneColor.rgba(0x0000000c), 11.0)
                             },
@@ -1849,13 +1735,8 @@ fn canvasInput(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
   ui.box(
     |ui| {
       ui.grow(1.0)
-      ui.height(Length.percent(100.0))
-      ui.style(
-        &[
-          Property.MinWidth { value: Length.px(100.0) },
-          Property.FlexBasis { value: Length.px(0.0) },
-        ],
-      )
+      ui.height(percent(100.0))
+      ui.style(&[css.minWidth(px(100.0)), css.flexBasis(px(0.0))])
       ui.onLayout(|bounds| Message.CanvasBounds { bounds: bounds })
       ui.testId("canvas")
       ui.label("Design canvas")
@@ -1881,8 +1762,14 @@ fn canvasInput(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         },
       )
 
+      // A double click opens direct text editing, which focuses its input; the press's default
+      // focus runs after this handler and would move focus back to the canvas, closing it.
       ui.onPointerDown(
-        |e| Reply<Message>.EmitAndStop { message: Message.Down { point: Pointer.from(e) } },
+        |e| Reply<Message>.Custom {
+          message: Option<Message>.some(Message.Down { point: Pointer.from(e) }),
+          stopPropagation: true,
+          preventDefault: e.detail >= 2,
+        },
       )
 
       ui.on(
@@ -1923,7 +1810,7 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         |ui| {
           place(&mut ui, x, m.canvasTop(), 1.0, m.canvasHeight())
           ui.background(rgb(0xcc8059))
-          ui.style(&[Property.PointerEvents { value: false }])
+          ui.style(&[css.pointerEvents(false)])
         },
       )
     }
@@ -1935,7 +1822,7 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         |ui| {
           place(&mut ui, m.canvasLeft(), y, m.canvasWidth(), 1.0)
           ui.background(rgb(0xcc8059))
-          ui.style(&[Property.PointerEvents { value: false }])
+          ui.style(&[css.pointerEvents(false)])
         },
       )
     }
@@ -1956,9 +1843,9 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
           place(&mut ui, f32.max(m.canvasLeft(), x), y, f32.min(w, m.canvasRight() - x), 18.0)
           ui.style(
             &[
-              Property.PointerEvents { value: false },
-              Property.WhiteSpace { value: WhiteSpace.NoWrap },
-              Property.OverflowX { value: Overflow.Hidden },
+              css.pointerEvents(false),
+              css.whiteSpace(WhiteSpace.NoWrap),
+              css.overflowX(Overflow.Hidden),
             ],
           )
           ui.fontSize(10.0)
@@ -2044,9 +1931,9 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
           place(&mut ui, x - 50.0, y, 100.0, 17.0)
           ui.style(
             &[
-              Property.PointerEvents { value: false },
-              Property.Display { value: Display.Flex },
-              Property.JustifyContent { value: Align.Center },
+              css.pointerEvents(false),
+              css.display(Keyword.Flex),
+              css.justifyContent(Align.Center),
             ],
           )
           ui.box(
@@ -2055,7 +1942,7 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
               ui.background(rgb(0x567a44))
               ui.color(rgb(0xffffff))
               ui.fontSize(9.0)
-              ui.style(&[Property.BorderRadius { value: corners(3.0) }])
+              ui.style(&[css.borderRadius(px(3.0))])
               let mut label = ui.alloc(format.decimal(b[2] - b[0]))
               ui.alloc(label.append(" × "))
               let height = ui.alloc(format.decimal(b[3] - b[1]))
@@ -2087,18 +1974,13 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             f32.max(30.0, e.shape.height * m.zoom),
           )
           ui.accessRole(Role.TextBox)
-          ui.style(&[Property.BoxSizing { value: BoxSizing.BorderBox }])
+          ui.style(&[css.boxSizing(BoxSizing.BorderBox)])
           ui.label("Edit text")
           ui.testId("Edit text")
           ui.takeFocus()
           ui.fontSize(f32.min(200.0, e.fontSize * m.zoom))
           ui.color(sceneColor.rgba(e.shape.fill))
-          ui.style(
-            &[
-              Property.FontFamily { family: e.fontFamily + 2 },
-              Property.FontWeight { value: u32.toF32(e.fontWeight) },
-            ],
-          )
+          ui.style(&[css.fontFamily(e.fontFamily + 2), css.fontWeight(u32.toF32(e.fontWeight))])
           border(&mut ui, 1.0, rgb(0x567a44), 0.0)
           ui.onInput(|v| Message.Draft { field: 14, value: move v })
           ui.onEnter(|| Message.FinishText)
@@ -2147,17 +2029,19 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
       ui.padding(3.0)
       ui.style(
         &[
-          Property.AlignItems { value: Align.Center },
-          Property.BoxShadow {
-            value: BoxShadow {
-              offsetX: 0.0,
-              offsetY: 2.0,
-              blur: 6.0,
-              spread: 0.0,
-              color: rgba(0x293a25, 0.06),
-              inset: false,
-            },
-          },
+          css.alignItems(Align.Center),
+          allocate(
+            css.boxShadow(
+              BoxShadow {
+                offsetX: 0.0,
+                offsetY: 2.0,
+                blur: 6.0,
+                spread: 0.0,
+                color: rgba(0x293a25, 0.06),
+                inset: false,
+              },
+            ),
+          ),
         ],
       )
       iconButton(&mut ui, t, m, icons.MINUS, "Zoom out", 38)
@@ -2171,9 +2055,9 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
         |ui| {
           ui.accessRole(Role.TextBox)
           ui.label("Zoom percentage")
-          ui.width(Length.px(42.0))
+          ui.width(px(42.0))
           ui.fontSize(10.0)
-          ui.style(&[Property.TextAlign { value: TextAlign.Center }])
+          ui.style(&[css.textAlign(TextAlign.Center)])
           ui.onInput(|value| Message.Draft { field: 31, value: move value })
           ui.onEnter(|| Message.Commit)
           ui.onBlur(|| Message.Commit)
@@ -2207,17 +2091,19 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
       ui.background(t.surface)
       ui.style(
         &[
-          Property.BorderRadius { value: corners(12.0) },
-          Property.BoxShadow {
-            value: BoxShadow {
-              offsetX: 0.0,
-              offsetY: 8.0,
-              blur: 30.0,
-              spread: 0.0,
-              color: rgba(0x2d3c27, 0.12),
-              inset: false,
-            },
-          },
+          css.borderRadius(px(12.0)),
+          allocate(
+            css.boxShadow(
+              BoxShadow {
+                offsetX: 0.0,
+                offsetY: 8.0,
+                blur: 30.0,
+                spread: 0.0,
+                color: rgba(0x2d3c27, 0.12),
+                inset: false,
+              },
+            ),
+          ),
         ],
       )
       border(&mut ui, 1.0, t.border, 12.0)
@@ -2240,7 +2126,7 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
           || Message.Tool { kind: kind },
           |ui| {
             ui.width(
-              Length.px(
+              px(
                 if m.width <= 850.0 {
                   35.0
                 } else {
@@ -2249,7 +2135,7 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
               ),
             )
             ui.height(
-              Length.px(
+              px(
                 if m.width <= 850.0 {
                   38.0
                 } else {
@@ -2259,12 +2145,12 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             )
             ui.style(
               &[
-                Property.Display { value: Display.Flex },
-                Property.FlexDirection { value: FlexDirection.Row },
-                Property.Position { value: Position.Relative },
-                Property.BoxSizing { value: BoxSizing.BorderBox },
-                Property.AlignItems { value: Align.Center },
-                Property.JustifyContent { value: Align.Center },
+                css.display(Keyword.Flex),
+                css.flexDirection(FlexDirection.Row),
+                css.position(Position.Relative),
+                css.boxSizing(BoxSizing.BorderBox),
+                css.alignItems(Align.Center),
+                css.justifyContent(Align.Center),
               ],
             )
             ui.padding(7.0)
@@ -2289,7 +2175,7 @@ fn canvasOverlays(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                 },
               },
             )
-            ui.style(&[Property.BorderRadius { value: corners(6.0) }])
+            ui.style(&[css.borderRadius(px(6.0))])
             if m.tool == kind {
               ui.background(t.accent)
               ui.color(rgb(0xffffff))
@@ -2340,17 +2226,12 @@ fn menu(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
     |ui| {
       ui.color(t.text)
       ui.fontSize(12.0)
-      ui.style(
-        &[
-          Property.FontFamily { family: 1 },
-          Property.LineHeight { value: LineHeight.Number { value: 1.5 } },
-        ],
-      )
+      ui.style(&[css.fontFamily(1), css.lineHeight(css.number(1.5))])
       place(&mut ui, 0.0, 0.0, m.width, m.height)
       ui.onPointerDown(|event| Reply<Message>.EmitAndStop { message: Message.Action { code: 35 } })
       if m.menu != 2 {
         ui.background(rgba(0x24301d, 0.188))
-        ui.style(&[Property.BackdropBlur { value: 3.0 }])
+        ui.style(&[allocate(css.backdropBlur(3.0))])
       }
       ui.column(
         |ui| {
@@ -2373,26 +2254,23 @@ fn menu(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             },
             0.0,
           )
-          ui.style(
-            &[
-              Property.Height { value: Length.Auto },
-              Property.MaxHeight { value: Length.px(m.height * 0.75) },
-            ],
-          )
+          ui.style(&[css.height(auto()), css.maxHeight(px(m.height * 0.75))])
           ui.background(t.surface)
           border(&mut ui, 1.0, t.border, 12.0)
           ui.style(
             &[
-              Property.BoxShadow {
-                value: BoxShadow {
-                  offsetX: 0.0,
-                  offsetY: 20.0,
-                  blur: 70.0,
-                  spread: 0.0,
-                  color: rgba(0x1d2b17, 0.18),
-                  inset: false,
-                },
-              },
+              allocate(
+                css.boxShadow(
+                  BoxShadow {
+                    offsetX: 0.0,
+                    offsetY: 20.0,
+                    blur: 70.0,
+                    spread: 0.0,
+                    color: rgba(0x1d2b17, 0.18),
+                    inset: false,
+                  },
+                ),
+              ),
             ],
           )
           ui.focusTrap(true)
@@ -2410,7 +2288,7 @@ fn menu(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             ui.padding(6.0)
             item(&mut ui, t, icons.PLUS, "New document", "", 12)
             item(&mut ui, t, icons.FILE, "Open document…", "⌘O", 36)
-            line(&mut ui, Side.Top)
+            line(&mut ui, css.borderTopWidth(px(1.0)))
             item(&mut ui, t, icons.EXPORT, "Save document", "⌘S", 13)
             item(&mut ui, t, icons.FILE, "Save as…", "⇧⌘S", 37)
             item(&mut ui, t, icons.EXPORT, "Export SVG", "", 14)
@@ -2428,18 +2306,18 @@ fn menu(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             )
             ui.row(
               |ui| {
-                ui.height(Length.px(47.0))
+                ui.height(px(47.0))
                 ui.padding(16.0)
                 ui.style(
                   &[
-                    Property.AlignItems { value: Align.Center },
-                    Property.FlexShrink { value: 0.0 },
-                    Property.BoxSizing { value: BoxSizing.BorderBox },
+                    css.alignItems(Align.Center),
+                    css.flexShrink(0.0),
+                    css.boxSizing(BoxSizing.BorderBox),
                   ],
                 )
-                line(&mut ui, Side.Bottom)
+                line(&mut ui, css.borderBottomWidth(px(1.0)))
                 ui.fontSize(14.0)
-                ui.style(&[Property.FontWeight { value: 600.0 }])
+                ui.style(&[css.fontWeight(600.0)])
                 ui.color(rgb(0x435c36))
                 ui.text(
                   if m.menu == 1 {
@@ -2455,12 +2333,7 @@ fn menu(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
             ui.column(
               |ui| {
                 ui.padding(12.0)
-                ui.style(
-                  &[
-                    Property.OverflowY { value: Overflow.Auto },
-                    Property.MinHeight { value: Length.px(0.0) },
-                  ],
-                )
+                ui.style(&[css.overflowY(Overflow.Auto), css.minHeight(px(0.0))])
                 if m.menu == 1 {
                   let titles: [string; 18] = [
                     "Fit everything",
@@ -2554,19 +2427,19 @@ fn menu(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                       ui.label("Search commands")
                       ui.placeholder("What would you like to do?")
                       ui.takeFocus()
-                      ui.height(Length.px(44.0))
+                      ui.height(px(44.0))
                       ui.padding(10.0)
                       ui.background(rgb(0xf4f7ee))
                       ui.fontSize(12.0)
                       border(&mut ui, 1.0, t.border, 6.0)
-                      ui.focused(&[Property.BorderColor { color: rgb(0x63885b) }])
+                      ui.focused(&[css.borderColor(rgb(0x63885b))])
                       ui.style(
                         &[
-                          Property.Margin { side: Side.Bottom, value: Length.px(10.0) },
-                          Property.Margin { side: Side.Left, value: Length.px(6.0) },
-                          Property.Margin { side: Side.Right, value: Length.px(6.0) },
-                          Property.FlexShrink { value: 0.0 },
-                          Property.BoxSizing { value: BoxSizing.BorderBox },
+                          css.marginBottom(px(10.0)),
+                          css.marginLeft(px(6.0)),
+                          css.marginRight(px(6.0)),
+                          css.flexShrink(0.0),
+                          css.boxSizing(BoxSizing.BorderBox),
                         ],
                       )
                       ui.onInput(|value| Message.CommandSearch { value: move value })
@@ -2600,10 +2473,10 @@ fn menu(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                       ui.color(rgb(0x929f85))
                       ui.style(
                         &[
-                          Property.LineHeight { value: LineHeight.Number { value: 1.8 } },
-                          Property.Padding { side: Side.Left, value: Length.px(10.0) },
-                          Property.Padding { side: Side.Right, value: Length.px(10.0) },
-                          Property.Margin { side: Side.Bottom, value: Length.px(15.0) },
+                          css.lineHeight(css.number(1.8)),
+                          css.paddingLeft(px(10.0)),
+                          css.paddingRight(px(10.0)),
+                          css.marginBottom(px(15.0)),
                         ],
                       )
                       ui.text(
@@ -2649,19 +2522,9 @@ fn menu(ui: &mut Ui<Message>, t: &Theme, m: &Studio) -> () {
                   while i < titles.length {
                     ui.row(
                       |ui| {
-                        ui.height(Length.px(28.5))
-                        ui.style(
-                          &[
-                            Property.AlignItems { value: Align.Center },
-                            Property.FlexShrink { value: 0.0 },
-                          ],
-                        )
-                        ui.style(
-                          &[
-                            Property.Padding { side: Side.Left, value: Length.px(10.0) },
-                            Property.Padding { side: Side.Right, value: Length.px(10.0) },
-                          ],
-                        )
+                        ui.height(px(28.5))
+                        ui.style(&[css.alignItems(Align.Center), css.flexShrink(0.0)])
+                        ui.style(&[css.paddingLeft(px(10.0)), css.paddingRight(px(10.0))])
                         ui.fontSize(11.0)
                         ui.color(rgb(0x6e7e61))
                         ui.text(titles[i])
@@ -2686,18 +2549,14 @@ pub fn render(m: &Studio, ui: &mut Ui<Message>) -> () {
 
   ui.column(
     |ui| {
-      ui.width(Length.percent(100.0))
-      ui.height(Length.percent(100.0))
+      ui.width(percent(100.0))
+      ui.height(percent(100.0))
       ui.tabIndex(-1)
       ui.takeFocus()
       ui.color(t.text)
       ui.fontSize(12.0)
       ui.style(
-        &[
-          Property.FontFamily { family: 1 },
-          Property.LineHeight { value: LineHeight.Number { value: 1.5 } },
-          Property.Position { value: Position.Relative },
-        ],
+        &[css.fontFamily(1), css.lineHeight(css.number(1.5)), css.position(Position.Relative)],
       )
 
       ui.onKeyDown(
@@ -2723,12 +2582,7 @@ pub fn render(m: &Studio, ui: &mut Ui<Message>) -> () {
       ui.row(
         |ui| {
           ui.grow(1.0)
-          ui.style(
-            &[
-              Property.MinHeight { value: Length.px(0.0) },
-              Property.FlexBasis { value: Length.px(0.0) },
-            ],
-          )
+          ui.style(&[css.minHeight(px(0.0)), css.flexBasis(px(0.0))])
           if m.panels {
             ui.key(201)
             sidebar(&mut ui, &t, m)
@@ -2745,28 +2599,23 @@ pub fn render(m: &Studio, ui: &mut Ui<Message>) -> () {
       ui.key(203)
       ui.row(
         |ui| {
-          ui.width(Length.percent(100.0))
-          ui.height(Length.px(27.0))
-          ui.style(
-            &[
-              Property.FlexShrink { value: 0.0 },
-              Property.BoxSizing { value: BoxSizing.BorderBox },
-            ],
-          )
+          ui.width(percent(100.0))
+          ui.height(px(27.0))
+          ui.style(&[css.flexShrink(0.0), css.boxSizing(BoxSizing.BorderBox)])
           ui.background(t.surface)
           ui.padding(12.0)
-          ui.style(&[Property.AlignItems { value: Align.Center }])
-          line(&mut ui, Side.Top)
+          ui.style(&[css.alignItems(Align.Center)])
+          line(&mut ui, css.borderTopWidth(px(1.0)))
           ui.gap(10.0)
           ui.label("Selection status")
           ui.fontSize(9.0)
           ui.color(t.mutedText)
           ui.box(
             |ui| {
-              ui.width(Length.px(4.0))
-              ui.height(Length.px(4.0))
+              ui.width(px(4.0))
+              ui.height(px(4.0))
               ui.background(rgb(0x7e9767))
-              ui.style(&[Property.BorderRadius { value: corners(2.0) }])
+              ui.style(&[css.borderRadius(px(2.0))])
             },
           )
           if m.selected > 0 {
@@ -2793,9 +2642,9 @@ pub fn render(m: &Studio, ui: &mut Ui<Message>) -> () {
             |ui| {
               ui.style(
                 &[
-                  Property.Display { value: Display.Flex },
-                  Property.FlexDirection { value: FlexDirection.Row },
-                  Property.AlignItems { value: Align.Center },
+                  css.display(Keyword.Flex),
+                  css.flexDirection(FlexDirection.Row),
+                  css.alignItems(Align.Center),
                 ],
               )
               ui.gap(4.0)
@@ -2809,9 +2658,9 @@ pub fn render(m: &Studio, ui: &mut Ui<Message>) -> () {
             |ui| {
               ui.style(
                 &[
-                  Property.Display { value: Display.Flex },
-                  Property.FlexDirection { value: FlexDirection.Row },
-                  Property.AlignItems { value: Align.Center },
+                  css.display(Keyword.Flex),
+                  css.flexDirection(FlexDirection.Row),
+                  css.alignItems(Align.Center),
                 ],
               )
               ui.gap(4.0)

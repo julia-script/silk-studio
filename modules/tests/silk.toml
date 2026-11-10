@@ -5,9 +5,9 @@ silk-version = "0.1.0-dev.64+8214c402307b"
 
 [dependencies]
 studio = { path = "../editor", package = "silk-studio-native" }
-ui_app = { git = "https://github.com/silk-lang/lib-ui.git", rev = "3c9db2a09a375ce2855292209a3de57d75c621ae", path = "modules/app", package = "ui-app" }
-ui_tree = { git = "https://github.com/silk-lang/lib-ui.git", rev = "3c9db2a09a375ce2855292209a3de57d75c621ae", path = "modules/tree", package = "ui-tree" }
-ui_fixtures = { git = "https://github.com/silk-lang/lib-ui.git", rev = "3c9db2a09a375ce2855292209a3de57d75c621ae", path = "modules/tree/fixtures", package = "ui-tree-fixtures" }
+ui_app = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/app", package = "ui-app" }
+ui_tree = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/tree", package = "ui-tree" }
+ui_fixtures = { git = "https://github.com/silk-lang/lib-ui.git", rev = "f3f4bf17f7020f1da724365a9fdd4a8d7a6bd0fb", path = "modules/tree/fixtures", package = "ui-tree-fixtures" }
 atlas = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "816162323e5a08dc4fc7967801ad075b5a305911", path = "modules/atlas", package = "graphics-atlas" }
 vector = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "816162323e5a08dc4fc7967801ad075b5a305911", path = "modules/vector", package = "graphics-vector" }
 codec = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "816162323e5a08dc4fc7967801ad075b5a305911", path = "modules/codec", package = "graphics-codec" }
