@@ -1,0 +1,295 @@
+//! Native camera CPU submission, retained versus ordinary, and their GPU pixel parity.
+//! Wall times include surface waits; they are not GPU timestamps or display FPS.
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  import silk.cli.task { Task, TaskError }
+  import silk.collections.bytes { Bytes }
+  import silk.collections.list { List }
+  import silk.core.effect { Effect }
+  import silk.core.option { Option }
+  import silk.core.result { Result }
+  import silk.io.writer { WriterError }
+  import silk.json.value { Value }
+  import silk.mem.allocator { Allocator, OutOfMemoryError }
+  import silk.system.child_process { ChildProcess, ProcessError }
+  import silk.system.filesystem { FileError, FileSystem, Path }
+  import silk.system.host_input { HostInput, HostInputError }
+  import silk.system.system_clock { SystemClock }
+  import silk.system.system_clock_native { OsSystemClock }
+  import silk.system.system_info { SystemInfo, SystemInfoError, KernelInfo }
+  import silk.system.system_info_native { OsSystemInfo }
+  import silk.text.format { Format, ParseError }
+  import silk.text.string { String }
+  import silk.num.f64
+  import silk.num.i64
+  import silk.num.usize
+  import task_json as J
+  import task_native { say, userPath }
+  import task_process { launch, waitExit }
+  import task_session { binary, outputDirectory, expect, summary, writeJson }
+  import task_support { pathText }
+
+  const STAGES: [string<'static>; 5] = [
+    "inputModelLayout",
+    "canvas",
+    "atlasAndSurface",
+    "drawSubmission",
+    "presentCall",
+  ]
+  const KEYS: [string<'static>; 5] = ["layout=", "canvas=", "upload=", "draw=", "present="]
+
+  /// `frame-ms: layout=… canvas=… upload=… draw=… present=…` rows, in order.
+  effect fn frames(text: string) -> List<[f64; 5]>
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let mut rows = List<[f64; 5]>.make()
+    let mut lines = String.split(text, "\n")
+    while let Option<string>.Some { value: line } = lines.next() {
+      let start = match String.find(line, "frame-ms: ") {
+        Option<usize>.Some { value } => value + 10
+        Option<usize>.None => {
+          continue
+        }
+      }
+      let rest = String.slice(line, start, String.byteLength(line) - start)
+      let mut row: [f64; 5] = [0.0; 5]
+      let mut tokens = String.split(rest, " ")
+      let mut index: usize = 0
+      while let Option<string>.Some { value: token } = tokens.next() {
+        if index < 5 && String.startsWith(token, KEYS[index]) {
+          let digits = String.slice(
+            token,
+            String.byteLength(KEYS[index]),
+            String.byteLength(token) - String.byteLength(KEYS[index]),
+          )
+          row[index] = match Format.f64Value(digits) {
+            Result<f64, ParseError>.Success { value } => value
+            Result<f64, ParseError>.Failure { .. } => run Task.abort("Malformed frame-ms value")
+          }
+          index = index + 1
+        }
+      }
+      run expect(index == 5, "Malformed frame-ms line")
+      run rows.append(row)
+    }
+    return move rows
+  }
+
+  effect fn phase(rows: &[[f64; 5]], start: usize, end: usize) -> Value
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let mut totals = List<f64>.make()
+    let mut at = start
+    while at < end {
+      run totals.append(rows[at][0] + rows[at][1] + rows[at][2] + rows[at][3] + rows[at][4])
+      at = at + 1
+    }
+    let mut result = run summary(totals.asSlice(), false)
+    let mut stages = J.object()
+    let mut stage: usize = 0
+    while stage < 5 {
+      let mut values = List<f64>.make()
+      at = start
+      while at < end {
+        run values.append(rows[at][stage])
+        at = at + 1
+      }
+      run J.set(&mut stages, STAGES[stage], run summary(values.asSlice(), false))
+      stage = stage + 1
+    }
+    run J.set(&mut result, "stages", move stages)
+    return move result
+  }
+
+  /// UTC time in the `2006-01-02T15:04:05.000Z` form of JavaScript's `toISOString`.
+  effect fn timestamp() -> String
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut clock = OsSystemClock.make()
+    let instant = run SystemClock.now() |> Effect.provideMut<SystemClock>(&mut clock)
+    let seconds = SystemClock.seconds(&instant)
+    let millisecond = SystemClock.nanoseconds(&instant) / 1000000
+    let days = seconds / 86400
+    let second = seconds % 86400
+
+    // Howard Hinnant's days-to-civil conversion for the proleptic Gregorian calendar.
+    let z = days + 719468
+    let era = z / 146097
+    let doe = z - era * 146097
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    let mp = (5 * doy + 2) / 153
+    let day = doy - (153 * mp + 2) / 5 + 1
+    let month = if mp < 10 {
+      mp + 3
+    } else {
+      mp - 9
+    }
+    let january: i64 = if month <= 2 {
+      1
+    } else {
+      0
+    }
+    let year = yoe + era * 400 + january
+    return run J.format(
+      "{year}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millisecond:03}Z",
+      &.{
+        year: year,
+        month: month,
+        day: day,
+        hour: second / 3600,
+        minute: second % 3600 / 60,
+        second: second % 60,
+        millisecond: millisecond,
+      },
+    )
+  }
+
+  effect fn kernel() -> KernelInfo
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let mut info = OsSystemInfo.make()
+    return match move run Effect.result(SystemInfo.kernel())
+      |> Effect.provideMut<SystemInfo>(&mut info) {
+      Result<KernelInfo, SystemInfoError | OutOfMemoryError>.Success { value } => move value
+      Result<KernelInfo, SystemInfoError | OutOfMemoryError>.Failure { error } => match move error {
+        OutOfMemoryError failure => {
+          fail move failure
+        }
+        SystemInfoError failure => {
+          drop failure
+          run Task.abort("Cannot read kernel information")
+        }
+      }
+    }
+  }
+
+  pub effect fn check(file: string, directoryOption: string) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    let mut design = String.make()
+    if file != "" {
+      let path = run userPath(file)
+      run expect(run FileSystem.exists(&path), "--file must name an existing design")
+      design = run String.copy(pathText(&path))
+    }
+    let directory = run outputDirectory(directoryOption, "build/native-camera-check")
+    let program = run binary("")
+    let info = run kernel()
+    let machine = run J.text(run Bytes.copy(Bytes.asSlice(&info.machine)))
+    let mut os = run J.text(run Bytes.copy(Bytes.asSlice(&info.name)))
+    run String.append(&mut os, "-")
+    run String.append(
+      &mut os,
+      String.view(&(run J.text(run Bytes.copy(Bytes.asSlice(&info.release))))),
+    )
+    run String.append(&mut os, "-")
+    run String.append(&mut os, String.view(&machine))
+    let mut result = J.object()
+    run J.setText(&mut result, "date", String.view(&(run timestamp())))
+    run J.setText(&mut result, "machine", String.view(&machine))
+    run J.setText(&mut result, "os", String.view(&os))
+    let mut viewport = J.object()
+    run J.set(&mut viewport, "width", J.integer(1440))
+    run J.set(&mut viewport, "height", J.integer(960))
+    if String.view(&design) != "" {
+      let designPath = run Path.make(String.view(&design))
+      let name = Path.name(&designPath) |> Option<string>.unwrapOr("")
+      let mut workload = run String.copy("Saved design: ")
+      run String.append(&mut workload, name)
+      run J.setText(&mut result, "workload", String.view(&workload))
+    } else {
+      run J.setText(&mut result, "workload", "100k image/text cards, 300004 editable layers")
+    }
+    run J.setText(
+      &mut result,
+      "metric",
+      "Native input/model/layout/scene/upload/draw/present-call wall time, including surface waits; not GPU timestamps or display FPS",
+    )
+    let runs = [["ordinary", "--no-retained"], ["retained", ""], ["gpuParity", "--check"]]
+    let mut index: usize = 0
+    while index < runs.length {
+      let name = runs[index][0]
+      let flag = runs[index][1]
+      let mut words = List<string>.make()
+      if String.view(&design) != "" {
+        run words.append("--benchmark-file")
+        run words.append(String.view(&design))
+      } else {
+        run words.append("--benchmark")
+      }
+      if flag != "" {
+        run words.append(flag)
+      }
+      let mut logName = run String.copy(name)
+      run String.append(&mut logName, ".log")
+      let log = run Path.join(&directory, String.view(&logName))
+      let mut child = run launch(String.view(&program), words.asSlice(), &[], &log, false)
+      let code = run waitExit(&mut child, 180000)
+      let bytes = run FileSystem.readFile(&log)
+      let text = run J.text(move bytes)
+      run expect(code == 0, String.view(&text))
+      let rows = run frames(String.view(&text))
+      let items = rows.asSlice()
+      let counted = run J.format("{name}: {count} frames", &.{ name: name, count: items.length })
+      run expect(items.length == 203, String.view(&counted))
+      if name == "gpuParity" {
+        run expect(String.contains(String.view(&text), ": pass"), String.view(&text))
+        let mut parity = String.make()
+        let mut lines = String.split(String.view(&text), "\n")
+        while let Option<string>.Some { value: line } = lines.next() {
+          if String.startsWith(line, "check:") {
+            parity = run String.copy(line)
+            break
+          }
+        }
+        let surface = String.view(&parity)
+        run expect(String.startsWith(surface, "check: "), "GPU parity run printed no check line")
+        let mut dims = String.split(String.slice(surface, 7, String.byteLength(surface) - 7), " ")
+        let pixelWidth = run whole(dims.next() |> Option<string>.unwrapOr(""))
+        run expect((dims.next() |> Option<string>.unwrapOr("")) == "x", surface)
+        let pixelHeight = run whole(dims.next() |> Option<string>.unwrapOr(""))
+        run J.set(&mut viewport, "pixelWidth", J.integer(pixelWidth))
+        run J.set(&mut viewport, "pixelHeight", J.integer(pixelHeight))
+        run J.set(&mut viewport, "scale", J.number(i64.toF64(pixelWidth) / 1440.0))
+        run J.setText(&mut result, name, surface)
+      } else {
+        let mut measured = J.object()
+        let zoom = run phase(items, 1, 121)
+        let pan = run phase(items, 121, 161)
+        let dragStart = run phase(items, 161, 162)
+        let drag = run phase(items, 162, 202)
+        let line = run J.format(
+          "{name} zoom {zoom} pan {pan} drag {drag}",
+          &.{
+            name: name,
+            zoom: J.real(&zoom, "medianMs"),
+            pan: J.real(&pan, "medianMs"),
+            drag: J.real(&drag, "medianMs"),
+          },
+        )
+        run say(String.view(&line))
+        run J.set(&mut measured, "zoom", move zoom)
+        run J.set(&mut measured, "pan", move pan)
+        run J.set(&mut measured, "dragStart", move dragStart)
+        run J.set(&mut measured, "drag", move drag)
+        run J.set(&mut result, name, move measured)
+      }
+      index = index + 1
+    }
+    run J.set(&mut result, "viewport", move viewport)
+    let report = run Path.join(&directory, "results.json")
+    run writeJson(&report, &result)
+    run say(J.textOf(&result, "gpuParity"))
+    run say(pathText(&report))
+  }
+
+  effect fn whole(text: string) -> i64
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    return match Format.i64Value(text) {
+      Result<i64, ParseError>.Success { value } => value
+      Result<i64, ParseError>.Failure { .. } => run Task.abort("Malformed surface size")
+    }
+  }
+}

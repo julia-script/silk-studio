@@ -26,7 +26,7 @@ import silk.io.writer_native { StderrWriter }
 import silk.text.string { String }
 import window.types { WindowError }
 import webgpu.runtime { GpuError }
-import ui_tree.lib { TreeError }
+import ui_tree.engine { TreeError }
 import atlas.atlas { AtlasError }
 import vector.geometry_error { GeometryError }
 

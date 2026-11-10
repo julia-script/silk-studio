@@ -1,9 +1,0 @@
-#!/usr/bin/env node
-(async () => {
-  const { root, run, build, options } = await import('./internal.mjs');
-  const { values: args } = options('Run Studio contracts and CPU workload timings; use --release for timings.\nOn macOS, set SILK_CLANG to LLVM 22 clang and SDKROOT to xcrun --show-sdk-path.', {
-    release: { type: 'boolean' },
-  });
-  const program = build('modules/tests', { release: args.release });
-  run(program, [], { cwd: root, timeout: 300000 });
-})().catch(error => { console.error(error); process.exitCode = 1; });

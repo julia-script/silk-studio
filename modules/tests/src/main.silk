@@ -12,7 +12,10 @@ import studio.render { Canvas, textResources }
 import ui_app.app { NoCommand }
 import ui_app.runtime { Runtime, pump }
 import ui_app.harness { click, clickRole, drag, typeText, press }
-import ui_tree.lib { UiTree, TreeError, Batch, FrameInput, CpuSnapshot, Role }
+import ui_tree.lib { Batch, Role }
+import ui_tree.engine { UiTree, TreeError }
+import ui_tree.node { FrameInput }
+import ui_tree.inspect { CpuSnapshot }
 import ui_tree.input { Input, MOD_CONTROL, MOD_META }
 import ui_fixtures.fixtures as fixtures
 import atlas.atlas { Atlas, AtlasError, AtlasOptions }

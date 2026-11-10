@@ -1,7 +1,5 @@
 build/
 .cache/
-.silk-home/
 target/
-node_modules/
 *.dSYM/
 .DS_Store

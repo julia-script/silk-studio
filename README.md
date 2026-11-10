@@ -9,38 +9,42 @@ WebGPU/Dawn. The compiled desktop app needs no browser, webview, JavaScript runt
 
 ## Clone and set up
 
-Install [Silk](https://silklang.org/) if `silk` is not on `PATH`, plus Node.js 22+
-and LLVM 22. Clone this repository and run all commands below from its root:
+Install [Silk](https://silklang.org/) if `silk` is not on `PATH`, plus LLVM 22.
+Clone this repository and run all commands below from its root:
 
 ```sh
 git clone https://github.com/julia-script/silk-studio.git
 cd silk-studio
 silk use
+silk task          # lists the automation commands
 ```
 
 `silk use` installs the compiler pinned by the root `silk.toml`. Dependencies are
 resolved at the Git revisions in the package manifests; sibling checkouts are not
-required. Do not run `scripts/setup-ci.mjs` for ordinary local use: it provisions
-hosted CI and cannot configure your terminal.
+required. Automation lives in typed Silk tasks (`src/tasks.silk`); no Node.js,
+Python or shell runner is involved. Do not run `silk task setup-ci` for ordinary
+local use: it provisions hosted CI and cannot configure your terminal.
 
 ## Run natively
 
 The macOS quickstart requires Apple Silicon macOS 26+, Xcode with the macOS SDK,
-Node.js 22+, and LLVM 22. Apple's `/usr/bin/clang` is not LLVM 22. With Homebrew
-LLVM 22 installed at its usual path:
+and LLVM 22. Apple's `/usr/bin/clang` is not LLVM 22, and Homebrew's unversioned
+`llvm` formula may be newer, so install the versioned kegs:
 
 ```sh
-export SILK_CLANG=/opt/homebrew/opt/llvm/bin/clang
+brew install llvm@22 lld@22
+export SILK_CLANG=/opt/homebrew/opt/llvm@22/bin/clang
+export PATH="/opt/homebrew/opt/lld@22/bin:$PATH"
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 "$SILK_CLANG" --version # must report clang 22
-node scripts/studio run --release
-node scripts/studio run --release --file ~/Design.silkdesign
+silk task native run --release
+silk task native run --release --file ~/Design.silkdesign
 ```
 
 If LLVM 22 is elsewhere, set `SILK_CLANG` to its absolute executable path. Keep
-both exports in the terminal used to run the app and checks.
+these exports in the terminal used to run the app and checks.
 
-The Node runner invokes Silk directly; package manifests provide native dependencies.
+Tasks invoke Silk directly; package manifests provide native dependencies.
 Linux/Windows platform dependencies follow the pinned
 [`lib-native`](https://github.com/silk-lang/lib-native) package. This port was
 written on macOS arm64; the `check` run (a scripted click and Tab, read back and
@@ -54,7 +58,7 @@ the scene the app hands over. GPU-retained overview images (see
 To build a self-contained macOS application, including fallback fonts:
 
 ```sh
-node scripts/studio run --release --bundle --build-only
+silk task native bundle
 open 'build/Silk Studio.app'
 ```
 
@@ -69,34 +73,29 @@ launcher changes to Resources so the same paths work in the bundle.
 
 `modules/browser` (`silk-studio-browser`) is the same editor built for wasm32, in a
 browser tab with WebGPU and JSPI (Chrome or Edge 137 or later). After the clone
-and `silk use` steps above, with Node.js 22+ and LLVM 22 installed:
+and `silk use` steps above, with LLVM 22 set up as for the native app:
 
 ```sh
-node scripts/browser serve   # http://127.0.0.1:8050/
+silk task browser serve   # http://127.0.0.1:8050/
 # Optional: choose another port, or build without serving.
-node scripts/browser serve --port 8051
-node scripts/browser build
+silk task browser serve --port 8051
+silk task browser build
 ```
 
-The browser runner defaults to `modules/browser`; no package argument is needed.
-It discovers LLVM 22+ through `clang-22` on `PATH`, macOS Homebrew LLVM, then
-`clang` on `PATH`. An explicit `SILK_CLANG` takes precedence, but no override is
-needed when a compatible compiler is found.
-
-The runner uses the published `lib-ui` browser payload and resolves WebGPU
-exports/runtime assets from the pinned `lib-native` Git cache, not sibling
-checkouts or deleted source trees. It preserves the 8 MiB wasm linker stack.
+The browser tasks build `modules/browser` with the declarative 8 MiB wasm stack and
+hand it to the pinned `lib-ui` browser tasks, which own the serving runtime and the
+Chromium driver. The WebGPU exports come from the pinned `lib-native`;
+`silk task generate-browser-exports` refreshes them and `--check` verifies them.
 
 It keeps the document in the page's localStorage (under `silk-app:studio`), so a reload finds it
 again; the first visit opens the starter design. There are no native menus or file dialogs:
 opening, saving as and exporting files are the desktop app's, and the fonts are the bundled Noto
 families. Add `?check` to the address for the same check as `--check`.
 
-Silk dev.63 can emit `MOD0007` for required `Platform` method imports
-([silk#2819](https://github.com/silk-lang/silk/issues/2819)) and browser imports
-`generated_webgpu_exports`/`libm` that supply C/wasm exports. Keep these imports:
-removing them can break method lookup or browser linkage. These warnings do not
-mean the build failed; no warning suppression is enabled.
+`Platform` is imported for its interface methods, which
+[silk#2819](https://github.com/silk-lang/silk/issues/2819) reports as unused, and the browser
+imports `generated_webgpu_exports`/`libm` only for the C/wasm symbols they export. These
+imports carry underscore aliases and comments; the build is warning-free.
 
 ## Editing
 
@@ -142,19 +141,23 @@ reliably. SVG text metrics depend on fonts in the viewer.
 ## Validation
 
 ```sh
-node scripts/test --release
-node scripts/studio check --release
-node scripts/studio run --release --build-only
-node scripts/inspect-check --stress
-node scripts/parity-check
-node scripts/camera-check
-node scripts/challenge-check
-node scripts/browser test
+silk task check                  # formatting, generated sources, contracts, release CPU timings
+silk task test --release
+silk task native check --release
+silk task native build --release
+silk task native inspect --stress
+silk task native parity
+silk task native camera
+silk task native challenge
+silk task browser test -- --width 1280 --height 800 --click --click-x 603 --click-y 723 --stored studio
 ```
 
-`inspect-check` automatically resolves and builds its CLI and MCP tools from the
-pinned `lib-ui` dependency. Explicit tool paths remain supported with `--cli` and
-`--mcp`; no separate sibling checkout or manual inspector build is needed.
+The inspector checks build the release app unless `--app` names another executable.
+`native inspect` also resolves and builds its CLI and MCP tools from the pinned `lib-ui`
+dependency; explicit tool paths remain supported with `--cli` and `--mcp`. The checks
+send inspector requests over its socket directly, so measured latency includes only the
+app and its IPC. They need macOS or Linux: Windows managed subprocesses are blocked by
+[silk#3034](https://github.com/silk-lang/silk/issues/3034), and those tasks say so.
 
 The parity check opens an isolated copy of the browser starter at 1440×960 and
 1000×700, exercises controls through the inspector, and saves screenshots and
@@ -164,18 +167,19 @@ comparison contract and platform differences.
 All checks avoid the default user design: the window check uses an in-memory
 starter; inspector/parity checks create and clean up fresh temporary documents;
 camera checks use an in-memory workload or read `--file` without saving. Native
-checks open real windows except `studio check` on Linux, which starts Xvfb and
+checks open real windows except `native check` on Linux, which starts Xvfb and
 headless Weston (`--backend x11|wayland|all`) and defaults to lavapipe. Inspector
-checks require a working display. To check the bundled launcher safely, pass
-`--app "$PWD/build/Silk Studio.app/Contents/MacOS/SilkStudio"` to `parity-check`.
+checks require a working display; on macOS keep it awake (for example under
+`caffeinate -du`). To check the bundled launcher safely, pass
+`--app "$PWD/build/Silk Studio.app/Contents/MacOS/SilkStudio"` to `native parity`.
 Do not use an ordinary launch without `--file` as a smoke test.
 
 The contract executable tests pointer-driven creation, native inspector input,
 undo/redo, subtree transforms, Alt-drag/cancel, validated file round trips, selected
 PNG/SVG exports, high-zoom vector text, cache reset, and 100k-element edits. It also
 prints CPU timings for selection, UI layout, and scene construction. These are not
-GPU timings or display FPS. On macOS, use the `SILK_CLANG` and `SDKROOT` exports
-from the native quickstart so CPU-renderer math symbols link against the real SDK.
+GPU timings or display FPS. On macOS, use the LLVM 22 and `SDKROOT` exports from
+the native quickstart so CPU-renderer math symbols link against the real SDK.
 
 The window check scripts real UI input, reads the GPU surface, compares it with
 the CPU rendering of the same scene, and writes `/tmp/silk-studio-native-check.png`.
@@ -184,7 +188,7 @@ See [PERFORMANCE.md](PERFORMANCE.md) for the measured workload and limits.
 The optional local UI inspector is off in release builds unless explicitly enabled:
 
 ```sh
-SILK_UI_INSPECT=/tmp/silk-studio.sock node scripts/studio run --release --inspect
+SILK_UI_INSPECT=/tmp/silk-studio.sock silk task native run --release --inspect
 ```
 
 For reproducible window sizes, the executable accepts `--width=1440 --height=960`.
@@ -243,9 +247,9 @@ one shared source image, not 100,000 unrelated photos. Labels use 196 word pairs
 from the tweet in Arial, Georgia and Courier New, with the normal native fallbacks.
 
 The screenshot is embedded unchanged in the executable and SVG exports. Its ICC
-profile is converted to sRGB for the native atlas. The optional, self-contained
-Node generator `node scripts/embed-tweet` regenerates the embedded asset from
-`assets/tweet-challenge.png`; Python is not required. Native `.silkdesign` files
+profile is converted to sRGB for the native atlas. `silk task embed-tweet`
+regenerates the embedded asset from `assets/tweet-challenge.png`, and
+`--check` verifies it. Native `.silkdesign` files
 preserve the browser's `image` and normalized
 `imageCrop` fields, including coordinates precise enough for source-pixel round trips.
 
@@ -271,9 +275,8 @@ batch compatible image crops and reuse image texture bindings within each pass.
 Run the release contracts and the real-event inspector checks without a recording:
 
 ```sh
-node scripts/test --release
-node scripts/studio run --release --build-only
-node scripts/challenge-check --leave-open
+silk task test --release
+silk task native challenge --leave-open
 ```
 
 The headless workload reports input, model, UI layout and scene composition CPU
@@ -294,10 +297,10 @@ as a separate overlay, including its opacity layers. Grid, document effects, and
 backdrop-dependent chrome use ordinary composition. Text raster updates preserve the
 retained document and update the visible labels rather than rebuilding every layer.
 
-After building the release app:
+The camera task builds the release app, then runs it three times:
 
 ```sh
-node scripts/camera-check
+silk task native camera
 ```
 
 This runs 120 zoom inputs, 40 wheel pans, and a 40-movement hand drag through the native UI dispatcher with
@@ -307,7 +310,7 @@ and logs go to `build/native-camera-check`. The initial creation frame is exclud
 The numbers are CPU frame preparation and submission times, not display FPS or GPU
 execution times. The executable also accepts `--profile` for frame-stage timings,
 `--benchmark` for the scripted workload, and `--no-retained` for the ordinary path.
-Use `camera-check --file /path/to/design.silkdesign` to measure a saved document without
+Use `silk task native camera --file /path/to/design.silkdesign` to measure a saved document without
 saving changes; the executable equivalent is `--benchmark-file /path/to/design.silkdesign`.
 The loader accepts documents up to 2 GiB and up to four million nodes per page.
 

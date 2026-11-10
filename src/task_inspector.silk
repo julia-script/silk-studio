@@ -1,0 +1,374 @@
+//! The inspector protocol over its local socket: one JSON request line, one JSON reply line.
+//! Requests go straight to the socket, so measured latency includes only the app and its IPC.
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  import silk.cli.task { Task, TaskError }
+  import silk.collections.bytes { Bytes }
+  import silk.collections.slice { Slice }
+  import silk.core.effect { Effect }
+  import silk.core.option { Option }
+  import silk.core.result { Result }
+  import silk.encoding.base64 { Base64, Base64Error }
+  import silk.io.byte_duplex { ByteDuplex, ByteIoError, ReadTransfer }
+  import silk.io.writer { WriterError }
+  import silk.json.value { Value }
+  import silk.mem.allocator { Allocator, OutOfMemoryError }
+  import silk.net.socket_native { Connection, ConnectOptions, NativeSocketError, connectUnixOwned }
+  import silk.system.filesystem { Path }
+  import silk.system.monotonic_clock { MonotonicClock }
+  import silk.system.monotonic_clock_native { OsMonotonicClock }
+  import silk.system.system_clock { Instant }
+  import silk.text.string { String }
+  import silk.num.i64
+  import task_json as J
+
+  pub struct Inspector {
+    path: Bytes,
+    timeout: u64
+  }
+
+  /// Primary shortcut modifier: Command on macOS, Control elsewhere.
+  pub fn primary() -> string<'static> {
+    static if Intrinsic.targetOperatingSystem() == "darwin" {
+      return "meta"
+    } else {
+      return "control"
+    }
+  }
+
+  pub effect fn make(socket: &Path, timeoutMilliseconds: i64) -> Inspector
+    ! OutOfMemoryError
+    ? &mut Allocator {
+    return Inspector {
+      path: run Bytes.copy(Path.rawBytes(socket)),
+      timeout: i64.toU64(timeoutMilliseconds) * 1000000,
+    }
+  }
+
+  effect fn connectWithin(inspector: &Inspector) -> Connection
+    ! NativeSocketError
+    ? &mut MonotonicClock {
+    let start = run MonotonicClock.now()
+    let deadline = Option<Instant>.some(MonotonicClock.deadlineAfter(&start, 5000000000))
+    return run connectUnixOwned(
+      Bytes.asSlice(&inspector.path),
+      ConnectOptions.defaults(),
+      move deadline,
+    )
+  }
+
+  effect fn exchange(
+    connection: &mut Connection,
+    line: &[u8],
+    reply: &mut Bytes,
+    timeout: u64,
+  ) -> ()
+    ! ByteIoError | OutOfMemoryError
+    ? &mut MonotonicClock | &mut Allocator {
+    let start = run MonotonicClock.now()
+
+    // `Instant` is not `Copy`, so each call derives the same deadline from the request start.
+    let mut at: usize = 0
+    while at < line.length {
+      let written = run ByteDuplex.writeSome(
+        Slice.view(line, at, line.length - at),
+        Option<Instant>.some(MonotonicClock.deadlineAfter(&start, timeout)),
+      )
+        |> Effect.provideMut<ByteDuplex>(&mut connection.*)
+      at = at + written
+    }
+    drop run ByteDuplex.writeSome(
+      b"\n",
+      Option<Instant>.some(MonotonicClock.deadlineAfter(&start, timeout)),
+    )
+      |> Effect.provideMut<ByteDuplex>(&mut connection.*)
+    reply.clear()
+    let mut chunk: [u8; 65536] = [0; 65536]
+    while true {
+      match run ByteDuplex.readSome(
+        &mut chunk,
+        Option<Instant>.some(MonotonicClock.deadlineAfter(&start, timeout)),
+      )
+        |> Effect.provideMut<ByteDuplex>(&mut connection.*) {
+        ReadTransfer.Data { count } => {
+          let mut end: usize = 0
+          while end < count && chunk[end] != 10 {
+            end = end + 1
+          }
+          run reply.append(Slice.view(&chunk, 0, end))
+          if end < count {
+            return ()
+          }
+        }
+        ReadTransfer.End => {
+          return ()
+        }
+      }
+    }
+  }
+
+  /// Sends `request`; `None` when nothing accepts the connection yet, as while the app starts.
+  pub effect fn attempt(inspector: &Inspector, request: &Value) -> Option<Value>
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let line = run J.compact(request)
+    let mut clock = OsMonotonicClock.make()
+    let connected = run Effect.result(connectWithin(inspector))
+      |> Effect.provideMut<MonotonicClock>(&mut clock)
+    let mut connection = match move connected {
+      Result<Connection, NativeSocketError>.Success { value } => move value
+      Result<Connection, NativeSocketError>.Failure { error } => {
+        drop error
+        return Option<Value>.none()
+      }
+    }
+    let mut reply = Bytes.make()
+    let exchanged = run Effect.result(
+      exchange(&mut connection, Bytes.asSlice(&line), &mut reply, inspector.timeout),
+    )
+      |> Effect.provideMut<MonotonicClock>(&mut clock)
+    drop run Effect.result(connection.close())
+    match move exchanged {
+      Result<(), ByteIoError | OutOfMemoryError>.Success { .. } => {}
+      Result<(), ByteIoError | OutOfMemoryError>.Failure { error } => match move error {
+        OutOfMemoryError failure => {
+          fail move failure
+        }
+        ByteIoError failure => {
+          drop failure
+          run failed(&line, b"no reply before the deadline")
+        }
+      }
+    }
+    if Bytes.length(&reply) == 0 {
+      run failed(&line, b"connection closed before the reply line")
+    }
+    let value = run J.parse(Bytes.asSlice(&reply))
+    if !J.truth(&value, "ok") {
+      run failed(&line, Bytes.asSlice(&reply))
+    }
+    return Option<Value>.some(move value)
+  }
+
+  effect fn failed(request: &Bytes, reply: &[u8]) -> never
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let mut message = run Bytes.copy(b"Inspector request ")
+    run Bytes.append(&mut message, Bytes.asSlice(request))
+    run Bytes.append(&mut message, b" failed: ")
+    run Bytes.append(&mut message, reply)
+    let text = run J.text(move message)
+    run Task.abort(String.view(&text))
+  }
+
+  pub effect fn ask(inspector: &Inspector, request: &Value) -> Value
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    return match move run attempt(inspector, request) {
+      Option<Value>.Some { value } => move value
+      Option<Value>.None => run Task.abort("Cannot connect to the app inspector")
+    }
+  }
+
+  pub effect fn request(command: string) -> Value
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let mut value = J.object()
+    run J.setText(&mut value, "cmd", command)
+    return move value
+  }
+
+  pub effect fn simple(inspector: &Inspector, command: string) -> Value
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let value = run request(command)
+    return run ask(inspector, &value)
+  }
+
+  /// The number of the last composed frame.
+  pub effect fn frame(inspector: &Inspector) -> i64
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let reply = run simple(inspector, "hello")
+    return J.whole(&reply, "frame")
+  }
+
+  pub effect fn press(inspector: &Inspector, key: string, modifiers: &[string]) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    run pressCode(inspector, key, "", modifiers)
+  }
+
+  /// A key press that also names the physical key `code`, such as `KeyA`.
+  pub effect fn pressCode(
+    inspector: &Inspector,
+    key: string,
+    code: string,
+    modifiers: &[string],
+  ) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut value = run request("press")
+    run J.setText(&mut value, "key", key)
+    if code != "" {
+      run J.setText(&mut value, "code", code)
+    }
+    if modifiers.length != 0 {
+      run J.set(&mut value, "modifiers", run J.texts(modifiers))
+    }
+    drop run ask(inspector, &value)
+  }
+
+  /// Pointer input with a click `count`, as for a double click.
+  pub effect fn pointerCount(inspector: &Inspector, phase: string, x: f64, y: f64, count: i64) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut value = run request("pointer")
+    run J.setText(&mut value, "phase", phase)
+    run J.set(&mut value, "x", J.number(x))
+    run J.set(&mut value, "y", J.number(y))
+    run J.set(&mut value, "count", J.integer(count))
+    drop run ask(inspector, &value)
+  }
+
+  pub effect fn clickNode(inspector: &Inspector, node: i64) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut value = run request("click")
+    run J.set(&mut value, "node", J.integer(node))
+    drop run ask(inspector, &value)
+  }
+
+  pub effect fn clickAt(inspector: &Inspector, x: f64, y: f64, count: i64) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut value = run request("click")
+    run J.set(&mut value, "x", J.number(x))
+    run J.set(&mut value, "y", J.number(y))
+    run J.set(&mut value, "count", J.integer(count))
+    drop run ask(inspector, &value)
+  }
+
+  pub effect fn typeText(inspector: &Inspector, text: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut value = run request("type")
+    run J.setText(&mut value, "text", text)
+    drop run ask(inspector, &value)
+  }
+
+  pub effect fn pointer(inspector: &Inspector, phase: string, x: f64, y: f64) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut value = run request("pointer")
+    run J.setText(&mut value, "phase", phase)
+    run J.set(&mut value, "x", J.number(x))
+    run J.set(&mut value, "y", J.number(y))
+    drop run ask(inspector, &value)
+  }
+
+  pub effect fn key(inspector: &Inspector, phase: string, key: string, code: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut value = run request("key")
+    run J.setText(&mut value, "phase", phase)
+    run J.setText(&mut value, "key", key)
+    run J.setText(&mut value, "code", code)
+    drop run ask(inspector, &value)
+  }
+
+  pub effect fn scroll(
+    inspector: &Inspector,
+    x: f64,
+    y: f64,
+    dx: f64,
+    dy: f64,
+    modifiers: &[string],
+  ) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut value = run request("scroll")
+    run J.set(&mut value, "x", J.number(x))
+    run J.set(&mut value, "y", J.number(y))
+    run J.set(&mut value, "dx", J.number(dx))
+    run J.set(&mut value, "dy", J.number(dy))
+    if modifiers.length != 0 {
+      run J.set(&mut value, "modifiers", run J.texts(modifiers))
+    }
+    drop run ask(inspector, &value)
+  }
+
+  /// A request that selects nodes by `field` (`name`, `label` or `testId`), exactly unless `fuzzy`.
+  pub effect fn selector(
+    command: string,
+    nodeRole: string,
+    field: string,
+    text: string,
+    fuzzy: bool,
+  ) -> Value
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let mut value = run request(command)
+    if nodeRole != "" {
+      run J.setText(&mut value, "role", nodeRole)
+    }
+    run J.setText(&mut value, field, text)
+    if !fuzzy {
+      run J.set(&mut value, "exact", J.boolean(true))
+    }
+    return move value
+  }
+
+  pub effect fn select(
+    inspector: &Inspector,
+    command: string,
+    nodeRole: string,
+    field: string,
+    text: string,
+  ) -> Value
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let value = run selector(command, nodeRole, field, text, false)
+    return run ask(inspector, &value)
+  }
+
+  pub effect fn count(inspector: &Inspector, nodeRole: string, field: string, text: string) -> i64
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let reply = run select(inspector, "query", nodeRole, field, text)
+    return J.whole(&reply, "count")
+  }
+
+  /// The semantic snapshot text, of the whole UI when `field` is empty.
+  pub effect fn snapshot(
+    inspector: &Inspector,
+    nodeRole: string,
+    field: string,
+    text: string,
+  ) -> String
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let reply = if field == "" {
+      run simple(inspector, "snapshot")
+    } else {
+      run select(inspector, "snapshot", nodeRole, field, text)
+    }
+    return run String.copy(J.textOf(&reply, "text"))
+  }
+
+  pub effect fn decodePng(reply: &Value) -> Bytes
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let encoded = String.utf8Bytes(J.textOf(reply, "png"))
+    let length = match Base64.decodedLength(encoded) {
+      Result<usize, Base64Error>.Success { value } => value
+      Result<usize, Base64Error>.Failure { .. } => run Task.abort("Screenshot is not Base64")
+    }
+    let mut bytes = run Bytes.zeroed(length)
+    match Base64.decodeInto(bytes.asMutSlice(), encoded) {
+      Result<usize, Base64Error>.Success { .. } => {}
+      Result<usize, Base64Error>.Failure { .. } => run Task.abort("Screenshot is not Base64")
+    }
+    return move bytes
+  }
+}

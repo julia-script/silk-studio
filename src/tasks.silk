@@ -1,0 +1,80 @@
+//! Silk Studio automation. `silk task` lists the commands.
+import silk.cli.command { Command, CommandLine, Opt }
+import silk.cli.task { Task, TaskError, TaskSet }
+import silk.io.writer { WriterError }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem }
+import silk.system.host_input { HostInput, HostInputError }
+import task_assets { embedTweet, format, browserExports }
+import task_native { contracts }
+import task_support { setupCi }
+import task_native_cli { Tasks as NativeTasks }
+import task_browser_cli { Tasks as BrowserTasks }
+
+union Tasks {
+  Check,
+  Format { pub check: bool },
+  Test { pub release: bool },
+  GenerateBrowserExports { pub check: bool },
+  EmbedTweet { pub check: bool },
+  SetupCi { pub browser: bool, pub linuxGpu: bool },
+  Native { pub native: NativeTasks },
+  Browser { pub browserTasks: BrowserTasks },
+}
+
+impl CommandLine for Tasks {
+  static fn command() -> Command<Tasks> {
+    return Command<Tasks>.make("tasks", "Silk Studio builds, checks and generators")
+      |> Command.variant(
+        "Check",
+        "Source formatting, embedded asset freshness, contracts and release CPU timings",
+      )
+      |> Command.variant("Format", "Format hand-maintained sources")
+      |> Command.variant(
+        "Test",
+        "Editor contracts and CPU workload timings; use --release for timings",
+      )
+      |> Command.variant("GenerateBrowserExports", "Copy WebGPU exports from the pinned lib-native")
+      |> Command.variant(
+        "EmbedTweet",
+        "Embed assets/tweet-challenge.png in modules/editor/src/tweet_asset.silk",
+      )
+      |> Command.variant("SetupCi", "Provision hosted CI through the pinned lib-native tasks")
+      |> Command.variant("Native", "Run, check, bundle and inspect the native app")
+      |> Command.variant("Browser", "Build, serve and test the browser editor")
+      |> Command.option("check", Opt.about("Fail instead of writing when the output would change"))
+      |> Command.option("release", Opt.about("Build optimized"))
+      |> Command.option("browser", Opt.about("Select Chromium for browser jobs"))
+      |> Command.option("linuxGpu", Opt.about("Provision the Linux software GPU backend"))
+      |> Command.subcommand("native")
+      |> Command.subcommand("browserTasks")
+  }
+}
+
+impl TaskSet for Tasks {
+  effect fn perform(self: Tasks) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    match move self {
+      Tasks.Check => {
+        run format(true)
+        run embedTweet(true)
+        run browserExports(true)
+        run contracts(true)
+      }
+      Tasks.Format { check } => run format(check)
+      Tasks.Test { release } => run contracts(release)
+      Tasks.EmbedTweet { check } => run embedTweet(check)
+      Tasks.GenerateBrowserExports { check } => run browserExports(check)
+      Tasks.SetupCi { browser, linuxGpu } => run setupCi(browser, linuxGpu)
+      Tasks.Native { native } => run TaskSet.perform(move native)
+      Tasks.Browser { browserTasks } => run TaskSet.perform(move browserTasks)
+    }
+  }
+}
+
+pub effect fn main() -> i32
+  ? &mut HostInput {
+  return run Task.main<Tasks>()
+}

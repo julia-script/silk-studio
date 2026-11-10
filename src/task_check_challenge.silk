@@ -1,0 +1,290 @@
+//! 100k tweet cards through native user-event dispatch, without recording. Measures
+//! request-to-composed-frame latency including IPC, not presentation FPS.
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  import silk.cli.task { TaskError }
+  import silk.collections.list { List }
+  import silk.core.effect { Effect }
+  import silk.core.result { Result }
+  import silk.io.writer { WriterError }
+  import silk.json.value { Value }
+  import silk.mem.allocator { Allocator, OutOfMemoryError }
+  import silk.system.child_process { ChildProcess, ProcessError }
+  import silk.system.filesystem { FileError, FileSystem, Path }
+  import silk.system.host_input { HostInput, HostInputError }
+  import silk.text.string { String }
+  import silk.num.f64
+  import silk.num.i64
+  import task_inspector {
+    Inspector,
+    make,
+    ask,
+    request,
+    simple,
+    frame,
+    pointer,
+    pressCode,
+    typeText,
+    select,
+    clickNode,
+    clickAt,
+    scroll,
+    primary
+  }
+  import task_json as J
+  import task_native { say }
+  import task_process { Process, pid, running, release, stop }
+  import task_session {
+    binary,
+    outputDirectory,
+    temporary,
+    remove,
+    ready,
+    expect,
+    startApp,
+    now,
+    summary,
+    writeJson
+  }
+  import task_support { pathText }
+
+  effect fn click(inspector: &Inspector, name: string, nodeRole: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    drop run select(inspector, "click", nodeRole, "name", name)
+  }
+
+  effect fn edit(inspector: &Inspector, name: string, value: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    run click(inspector, name, "textbox")
+    run pressCode(inspector, "a", "KeyA", &[primary()])
+    if value != "" {
+      run typeText(inspector, value)
+    } else {
+      run pressCode(inspector, "Backspace", "", &[])
+    }
+    run pressCode(inspector, "Enter", "", &[])
+  }
+
+  effect fn textOf(inspector: &Inspector, label: string) -> String
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut selector = run request("snapshot")
+    run J.setText(&mut selector, "role", "textbox")
+    run J.setText(&mut selector, "label", label)
+    let reply = run ask(inspector, &selector)
+    return run String.copy(J.textOf(&reply, "text"))
+  }
+
+  pub effect fn check(directoryOption: string, leaveOpen: bool) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    let program = run binary("")
+    let directory = if directoryOption == "" {
+      let fallback = run Path.make("/tmp/silk-native-tweet")
+      run FileSystem.createDirectoriesRecursively(&fallback)
+      move fallback
+    } else {
+      run outputDirectory(directoryOption, "")
+    }
+    let session = run temporary("silk-native-tweet-")
+    let socket = run Path.join(&session, "ui.sock")
+    let document = run Path.join(&session, "challenge.silkdesign")
+    let log = run Path.join(&directory, "app.log")
+    let mut child = run startApp(
+      String.view(&program),
+      &["--inspect", pathText(&document)],
+      &socket,
+      &log,
+      true,
+    )
+    let pidFile = run Path.join(&directory, "pid")
+    let pidText = run J.format("{pid}", &.{ pid: pid(&child) })
+    run FileSystem.writeFile(&pidFile, String.utf8Bytes(String.view(&pidText)))
+    let documentFile = run Path.join(&directory, "document-path")
+    let mut documentText = run String.copy(pathText(&document))
+    run String.append(&mut documentText, "\n")
+    run FileSystem.writeFile(&documentFile, String.utf8Bytes(String.view(&documentText)))
+    let result = run Effect.result(exercise(&mut child, &socket, &log, &directory))
+    if leaveOpen && running(&child) {
+      release(&mut child)
+      let mut message = run String.copy("Isolated document retained: ")
+      run String.append(&mut message, pathText(&document))
+      run say(String.view(&message))
+    } else {
+      stop(&mut child)
+      run remove(&session)
+    }
+    match move result {
+      Result<(), TaskError | FileError | OutOfMemoryError | WriterError>.Success { .. } => {}
+      Result<(), TaskError | FileError | OutOfMemoryError | WriterError>.Failure { error } => {
+        fail move error
+      }
+    }
+  }
+
+  effect fn zoomTrial(inspector: &Inspector) -> Value
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    run click(inspector, "Fit", "button")
+    let mut samples = List<f64>.make()
+    let mut previous = run frame(inspector)
+    let mut index: i64 = 0
+    while index < 120 {
+      let started = now()
+      run scroll(
+        inspector,
+        740.0,
+        550.0,
+        0.0,
+        if index < 60 {
+          -17.5
+        } else {
+          16.35514
+        },
+        &["control"],
+      )
+      let current = run frame(inspector)
+      run expect(current > previous, "Zoom did not compose a new frame")
+      previous = current
+      run samples.append(now() - started)
+      index = index + 1
+    }
+    return run summary(samples.asSlice(), true)
+  }
+
+  effect fn exercise(child: &mut Process, socket: &Path, log: &Path, directory: &Path) -> ()
+    ! TaskError | FileError | OutOfMemoryError | WriterError
+    ? &mut Allocator | &mut FileSystem {
+    let inspector = run make(socket, 120000)
+    let initial = run ready(&mut child.*, &inspector, log, 30000, false)
+    run click(&inspector, "Commands", "button")
+    let started = now()
+    run edit(&inspector, "Search commands", "Add 100k image + text cards")
+    drop run simple(&inspector, "hello")
+    let mut result = J.object()
+    run J.setText(
+      &mut result,
+      "description",
+      "100k editable groups, 100k image crops, 100k labels; one source image; three fonts",
+    )
+    run J.set(&mut result, "creationOrOpenMs", J.number(now() - started))
+    run J.set(&mut result, "scale", J.number(J.real(&initial, "scale")))
+    run J.setText(
+      &mut result,
+      "metric",
+      "Inspector event through composed-frame acknowledgment, including IPC; not presentation FPS",
+    )
+    run say("PASS: challenge page opens")
+    let trials = ["coldZoom", "warmZoom"]
+    let mut trial: usize = 0
+    while trial < trials.length {
+      let measured = run zoomTrial(&inspector)
+      let line = run J.compact(&measured)
+      let mut message = run String.copy(trials[trial])
+      run String.append(&mut message, " ")
+      run String.append(&mut message, String.view(&(run J.text(move line))))
+      run say(String.view(&message))
+      run J.set(&mut result, trials[trial], move measured)
+      trial = trial + 1
+    }
+    run click(&inspector, "Fit", "button")
+    let mut pans = List<f64>.make()
+    let mut index: i64 = 0
+    while index < 40 {
+      let begin = now()
+      run scroll(
+        &inspector,
+        740.0,
+        550.0,
+        if index < 20 {
+          6.0
+        } else {
+          -6.0
+        },
+        0.0,
+        &[],
+      )
+      drop run simple(&inspector, "hello")
+      run pans.append(now() - begin)
+      index = index + 1
+    }
+    run J.set(&mut result, "pan", run summary(pans.asSlice(), true))
+
+    // Empty-space start, then span cards: even an unchanged selection must repaint.
+    run click(&inspector, "Fit", "button")
+    run pointer(&inspector, "down", 225.0, 850.0)
+    let mut previous = run frame(&inspector)
+    index = 0
+    while index < 20 {
+      run pointer(
+        &inspector,
+        "move",
+        300.0 + i64.toF64(index) * 35.0,
+        800.0 - i64.toF64(index) * 10.0,
+      )
+      let current = run frame(&inspector)
+      run expect(current > previous, "Marquee froze")
+      previous = current
+      index = index + 1
+    }
+    run pointer(&inspector, "up", 965.0, 610.0)
+    run pressCode(&inspector, "Escape", "", &[])
+    run edit(&inspector, "Find a layer", "Label")
+    let mut targetQuery = run request("query")
+    run J.setText(&mut targetQuery, "role", "button")
+    run J.setText(&mut targetQuery, "name", "Label")
+    run J.set(&mut targetQuery, "exact", J.boolean(true))
+    run J.set(&mut targetQuery, "limit", J.integer(1))
+    let targets = run ask(&inspector, &targetQuery)
+    let found = run J.items(run J.field(&targets, "nodes"))
+    run expect(found.length != 0, "No independently selectable label")
+    run clickNode(&inspector, J.whole(&found[0], "id"))
+    run click(&inspector, "Commands", "button")
+    run edit(&inspector, "Search commands", "Zoom to selection")
+    drop run simple(&inspector, "hello")
+    let handles = run select(&inspector, "query", "", "label", "Resize handle")
+    let nodes = run J.items(run J.field(&handles, "nodes"))
+    run expect(nodes.length != 0, "No resize handles")
+    let mut minX = J.real(&nodes[0], "x")
+    let mut maxX = minX
+    let mut minY = J.real(&nodes[0], "y")
+    let mut maxY = minY
+    let mut scan: usize = 1
+    while scan < nodes.length {
+      minX = f64.min(minX, J.real(&nodes[scan], "x"))
+      maxX = f64.max(maxX, J.real(&nodes[scan], "x"))
+      minY = f64.min(minY, J.real(&nodes[scan], "y"))
+      maxY = f64.max(maxY, J.real(&nodes[scan], "y"))
+      scan = scan + 1
+    }
+    run clickAt(&inspector, (minX + maxX) / 2.0 + 4.0, (minY + maxY) / 2.0 + 4.0, 2)
+    let editors = run select(&inspector, "query", "textbox", "label", "Edit text")
+    run expect(J.whole(&editors, "count") == 1, "Double click did not open direct text editing")
+    run edit(&inspector, "Edit text", "Native zoom test")
+    let edited = run textOf(&inspector, "Text")
+    run expect(
+      String.contains(String.view(&edited), "Native zoom test"),
+      "Direct text entry did not commit",
+    )
+    run click(&inspector, "Undo", "button")
+    let undone = run textOf(&inspector, "Text")
+    run expect(
+      !String.contains(String.view(&undone), "Native zoom test"),
+      "Undo did not revert the text edit",
+    )
+    run edit(&inspector, "Find a layer", "")
+    run pressCode(&inspector, "Escape", "", &[])
+    run click(&inspector, "Fit", "button")
+    run J.set(
+      &mut result,
+      "interactionChecks",
+      run J.texts(&["zoom", "pan", "marquee redraw", "direct text entry", "undo"]),
+    )
+    let report = run Path.join(directory, "results.json")
+    run writeJson(&report, &result)
+    run say("PASS: native zoom, pan, marquee, direct text edit and undo")
+    run say(pathText(&report))
+  }
+}

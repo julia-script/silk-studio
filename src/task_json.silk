@@ -1,0 +1,220 @@
+//! JSON values for inspector requests and check reports, and formatted text.
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.io.writer { Writer, WriterError }
+import silk.json.output { JsonOptions }
+import silk.json.scanner { JsonError }
+import silk.json.value { Json, Value, JsonNumber, JsonEntry }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.format { Format }
+import silk.text.string { String, InvalidUtf8 }
+
+struct Sink {
+  bytes: Bytes,
+  count: usize,
+  counting: bool
+}
+
+impl Writer for Sink {
+  effect fn writeAll(self: &mut Self, val: &[u8]) -> ()
+    ! WriterError {
+    self.count = self.count + val.length
+    if !self.counting && !Bytes.appendSliceWithinCapacity(&mut self.bytes, val) {
+      fail Writer.failure()
+    }
+  }
+
+  effect fn flush(self: &mut Self) -> () ! WriterError {}
+}
+
+pub effect fn format<A>(static template: string<'static>, args: &A) -> String
+  ! TaskError | OutOfMemoryError | WriterError
+  ? &mut Allocator {
+  let mut count = Sink { bytes: Bytes.make(), count: 0, counting: true }
+  run Format.format(template, args) |> Effect.provideMut<Writer>(&mut count)
+  let mut sink = Sink { bytes: run Bytes.makeWithCapacity(count.count), count: 0, counting: false }
+  run Format.format(template, args) |> Effect.provideMut<Writer>(&mut sink)
+  return run text(move sink.bytes)
+}
+
+pub effect fn text(bytes: Bytes) -> String
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  return match move String.fromBytes(move bytes) {
+    Result<String, InvalidUtf8>.Success { value } => move value
+    Result<String, InvalidUtf8>.Failure { .. } => run Task.abort("Expected UTF-8 text")
+  }
+}
+
+pub effect fn parse(bytes: &[u8]) -> Value
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  return match move run Effect.result(Json.parse(bytes)) {
+    Result<Value, JsonError | OutOfMemoryError>.Success { value } => move value
+    Result<Value, JsonError | OutOfMemoryError>.Failure { error } => match move error {
+      OutOfMemoryError failure => {
+        fail move failure
+      }
+      JsonError failure => {
+        drop failure
+        run Task.abort("Invalid JSON reply")
+      }
+    }
+  }
+}
+
+effect fn serialized(value: &Value, options: &JsonOptions, newline: bool) -> Bytes
+  ! TaskError | OutOfMemoryError | WriterError
+  ? &mut Allocator {
+  let mut count = Sink { bytes: Bytes.make(), count: 0, counting: true }
+  run Effect.catchAll(Json.writeWith(value, options), unserializable)
+    |> Effect.provideMut<Writer>(&mut count)
+  let mut sink = Sink {
+    bytes: run Bytes.makeWithCapacity(count.count + 1),
+    count: 0,
+    counting: false,
+  }
+  run Effect.catchAll(Json.writeWith(value, options), unserializable)
+    |> Effect.provideMut<Writer>(&mut sink)
+  if newline {
+    drop Bytes.appendWithinCapacity(&mut sink.bytes, 10)
+  }
+  return move sink.bytes
+}
+
+effect fn unserializable<E>(error: E) -> ()
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  drop error
+  run Task.abort("Cannot serialize JSON")
+}
+
+/// One line, as the inspector protocol sends requests.
+pub effect fn compact(value: &Value) -> Bytes
+  ! TaskError | OutOfMemoryError | WriterError
+  ? &mut Allocator {
+  return run serialized(value, &JsonOptions.compact(), false)
+}
+
+/// Two-space indented with a final newline, as check reports are written.
+pub effect fn pretty(value: &Value) -> Bytes
+  ! TaskError | OutOfMemoryError | WriterError
+  ? &mut Allocator {
+  return run serialized(value, &JsonOptions.indented(2), true)
+}
+
+pub fn object() -> Value {
+  return Value.Object { entries: List<JsonEntry>.make() }
+}
+
+pub fn array() -> Value {
+  return Value.Array { values: List<Value>.make() }
+}
+
+pub fn number(value: f64) -> Value {
+  return Value.Number { value: JsonNumber.Float { value: value } }
+}
+
+pub fn integer(value: i64) -> Value {
+  return Value.Number { value: JsonNumber.Integer { value: value } }
+}
+
+pub fn boolean(value: bool) -> Value {
+  return Value.Bool { value: value }
+}
+
+pub effect fn textValue(value: string) -> Value
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  return Value.String { text: run String.copy(value) }
+}
+
+pub effect fn set(target: &mut Value, key: string, value: Value) -> ()
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  match &mut target.* {
+    Value.Object { entries } => {
+      run entries.append(JsonEntry { key: run String.copy(key), value: move value })
+    }
+    _ => run Task.abort("Expected a JSON object")
+  }
+}
+
+pub effect fn setText(target: &mut Value, key: string, value: string) -> ()
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  run set(&mut target, key, run textValue(value))
+}
+
+pub effect fn push(target: &mut Value, value: Value) -> ()
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  match &mut target.* {
+    Value.Array { values } => {
+      run values.append(move value)
+    }
+    _ => run Task.abort("Expected a JSON array")
+  }
+}
+
+pub effect fn texts(values: &[string]) -> Value
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  let mut result = array()
+  let mut at: usize = 0
+  while at < values.length {
+    run push(&mut result, run textValue(values[at]))
+    at = at + 1
+  }
+  return move result
+}
+
+pub effect fn field<'a>(value: &'a Value, key: string) -> &'a Value
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  return match Json.field(value, key) {
+    Option<&'a Value>.Some { value: found } => found
+    Option<&'a Value>.None => run Task.abort("Missing JSON field")
+  }
+}
+
+pub effect fn items(value: &Value) -> &[Value]
+  ! TaskError | OutOfMemoryError
+  ? &mut Allocator {
+  return match &value.* {
+    Value.Array { values } => values.asSlice()
+    _ => run Task.abort("Expected a JSON array")
+  }
+}
+
+pub fn real(value: &Value, key: string) -> f64 {
+  return Json.field(value, key)
+    |> Json.asF64
+    |> Option<f64>.unwrapOr(0.0)
+}
+
+pub fn whole(value: &Value, key: string) -> i64 {
+  return Json.field(value, key)
+    |> Json.asI64
+    |> Option<i64>.unwrapOr(-1)
+}
+
+pub fn textOf<'a>(value: &'a Value, key: string) -> string<'a> {
+  return Json.field(value, key)
+    |> Json.asString
+    |> Option<string<'a>>.unwrapOr("")
+}
+
+pub fn truth(value: &Value, key: string) -> bool {
+  return match Json.field(value, key) {
+    Option<&Value>.Some { value: found } => match &found.* {
+      Value.Bool { value: flag } => flag
+      _ => false
+    }
+    Option<&Value>.None => false
+  }
+}

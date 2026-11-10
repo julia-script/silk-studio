@@ -592,9 +592,13 @@ impl App<Message, NoCommand> for Studio {
           self.draft = move value
         }
         NumberEvent.Commit { value } => {
-          if value != previous {
+          // Compare as the field shows the numbers: percentage fields scale stored f32 values, so
+          // an untouched field parses back to a value a rounding error away from `previous`.
+          let next = self.heap.alloc(format.decimal(value))
+          let shown = self.heap.alloc(format.decimal(previous))
+          if String.view(&next) != String.view(&shown) {
             self.draftField = field
-            self.draft = self.heap.alloc(format.decimal(value))
+            self.draft = move next
             editing.commitDraft(&mut self)
           } else {
             self.draftField = 0

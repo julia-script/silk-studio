@@ -9,7 +9,10 @@ import vector.pixmap { Pixmap }
 import model { Studio, Element }
 import editing
 import editor.document { Document, Camera }
-import ui_tree.lib { UiTree, TreeError, Batch, FrameInput, CpuSnapshot }
+import ui_tree.lib { Batch }
+import ui_tree.engine { UiTree, TreeError }
+import ui_tree.node { FrameInput }
+import ui_tree.inspect { CpuSnapshot }
 import ui_scene.scene { Scene }
 import ui_scene.primitives { Quad, ContentMask, Background }
 import ui_scene.color as color

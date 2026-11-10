@@ -1,0 +1,179 @@
+//! The native desktop application: run, window check, bundle and inspector-driven checks.
+import silk.cli.command { Command, CommandLine, Opt }
+import silk.cli.task { TaskError, TaskSet }
+import silk.io.writer { WriterError }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { String }
+import task_native as Native
+
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  import task_check_inspect as Inspect
+  import task_check_parity as Parity
+  import task_check_challenge as Challenge
+  import task_check_camera as Camera
+}
+
+static if Intrinsic.targetOperatingSystem() == "windows" {
+  import silk.cli.task { Task }
+}
+
+pub union Tasks {
+  Run { pub release: bool, pub inspect: bool, pub file: String },
+  Check { pub release: bool, pub backend: String },
+  Build { pub release: bool },
+  Bundle,
+  Inspect {
+    pub app: String,
+    pub cli: String,
+    pub mcp: String,
+    pub artifacts: String,
+    pub stress: bool
+  },
+  Parity { pub app: String, pub artifacts: String },
+  Challenge { pub directory: String, pub leaveOpen: bool },
+  Camera { pub file: String, pub directory: String },
+}
+
+impl CommandLine for Tasks {
+  static fn command() -> Command<Tasks> {
+    return Command<Tasks>.make("native", "The native desktop application")
+      |> Command.variant("Run", "Open ~/.silk-studio.silkdesign, or --file")
+      |> Command.variant(
+        "Check",
+        "Dispatch Rectangle and Tab, then compare the window surface with the CPU reference",
+      )
+      |> Command.variant("Build", "Build the application and print its executable path")
+      |> Command.variant("Bundle", "Build build/Silk Studio.app with fallback fonts (macOS)")
+      |> Command.variant(
+        "Inspect",
+        "Marquee, creation, entry, resize and MCP capture through the inspector",
+      )
+      |> Command.variant(
+        "Parity",
+        "Browser-starter controls at 1440x960 and 1000x700, with screenshots and snapshots",
+      )
+      |> Command.variant(
+        "Challenge",
+        "100k image+text cards: zoom, pan, marquee and direct text editing latency",
+      )
+      |> Command.variant(
+        "Camera",
+        "Retained versus ordinary camera CPU submission and GPU pixel parity",
+      )
+      |> Command.option("release", Opt.about("Build optimized"))
+      |> Command.option("inspect", Opt.about("Enable the local UI inspector"))
+      |> Command.option(
+        "file",
+        Opt.about("Design to open or measure instead of the default workload") |> Opt.default(""),
+      )
+      |> Command.option(
+        "backend",
+        Opt.about("Linux window backend: all, x11 or wayland") |> Opt.default("all"),
+      )
+      |> Command.option(
+        "app",
+        Opt.about("App executable to check instead of the release build") |> Opt.default(""),
+      )
+      |> Command.option(
+        "cli",
+        Opt.about("Inspector CLI instead of the pinned lib-ui build") |> Opt.default(""),
+      )
+      |> Command.option(
+        "mcp",
+        Opt.about("Inspector MCP server instead of the pinned lib-ui build") |> Opt.default(""),
+      )
+      |> Command.option(
+        "artifacts",
+        Opt.about("Directory for captures, logs and timings") |> Opt.default(""),
+      )
+      |> Command.option("stress", Opt.about("Also add and exercise the 100k page"))
+      |> Command.option(
+        "directory",
+        Opt.about("Directory for logs and results.json") |> Opt.default(""),
+      )
+      |> Command.option(
+        "leaveOpen",
+        Opt.about("Keep the detached app and its isolated document afterwards"),
+      )
+  }
+}
+
+impl TaskSet for Tasks {
+  effect fn perform(self: Tasks) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    match move self {
+      Tasks.Run { release, inspect, file } => run Native.runApp(
+        release,
+        inspect,
+        String.view(&file),
+      )
+      Tasks.Check { release, backend } => run Native.check(release, String.view(&backend))
+      Tasks.Build { release } => {
+        let binary = run Native.app(release)
+        run Native.say(String.view(&binary))
+      }
+      Tasks.Bundle => run Native.bundle()
+      Tasks.Inspect { app, cli, mcp, artifacts, stress } => {
+        static if Intrinsic.targetOperatingSystem() == "windows" {
+          drop app
+          drop cli
+          drop mcp
+          drop artifacts
+          drop stress
+          run unsupported()
+        } else {
+          let options = Inspect.Options {
+            app: String.view(&app),
+            cli: String.view(&cli),
+            mcp: String.view(&mcp),
+            artifacts: String.view(&artifacts),
+            stress: stress,
+          }
+          run Inspect.check(&options)
+        }
+      }
+      Tasks.Parity { app, artifacts } => {
+        static if Intrinsic.targetOperatingSystem() == "windows" {
+          drop app
+          drop artifacts
+          run unsupported()
+        } else {
+          run Parity.check(String.view(&app), String.view(&artifacts))
+        }
+      }
+      Tasks.Challenge { directory, leaveOpen } => {
+        static if Intrinsic.targetOperatingSystem() == "windows" {
+          drop directory
+          drop leaveOpen
+          run unsupported()
+        } else {
+          run Challenge.check(String.view(&directory), leaveOpen)
+        }
+      }
+      Tasks.Camera { file, directory } => {
+        static if Intrinsic.targetOperatingSystem() == "windows" {
+          drop file
+          drop directory
+          run unsupported()
+        } else {
+          run Camera.check(String.view(&file), String.view(&directory))
+        }
+      }
+    }
+  }
+}
+
+static if Intrinsic.targetOperatingSystem() == "windows" {
+  effect fn unsupported() -> never
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    run Task.abort(
+      "Windows managed subprocess support is unavailable: https://github.com/silk-lang/silk/issues/3034",
+    )
+  }
+}

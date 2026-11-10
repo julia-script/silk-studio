@@ -1,0 +1,554 @@
+//! Native Studio controls through user-equivalent inspector input, at both desktop viewport
+//! sizes, against an isolated copy of the browser starter, with screenshots and snapshots.
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  import silk.cli.task { Task, TaskError }
+  import silk.collections.bytes { Bytes }
+  import silk.collections.list { List }
+  import silk.core.effect { Effect }
+  import silk.core.option { Option }
+  import silk.core.result { Result }
+  import silk.io.writer { WriterError }
+  import silk.json.value { Json, Value }
+  import silk.mem.allocator { Allocator, OutOfMemoryError }
+  import silk.system.child_process { ChildProcess, ProcessError }
+  import silk.system.filesystem { FileError, FileSystem, Path }
+  import silk.system.host_input { HostInput, HostInputError }
+  import silk.text.format { Format, ParseError }
+  import silk.text.string { String }
+  import silk.num.f64
+  import silk.num.i64
+  import task_inspector {
+    Inspector,
+    make,
+    ask,
+    request,
+    pointer,
+    pointerCount,
+    key,
+    press,
+    typeText,
+    select,
+    snapshot,
+    decodePng,
+    primary,
+    scroll
+  }
+  import task_json as J
+  import task_native { say }
+  import task_process { stop }
+  import task_session { binary, outputDirectory, temporary, remove, ready, expect, startApp }
+  import task_support { pathText, rootPath }
+
+  struct View<'a> {
+    inspector: &'a Inspector,
+    width: f64,
+    height: f64,
+    output: &'a Path
+  }
+
+  effect fn query(view: &View<'_>, nodeRole: string, label: string) -> Value
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    return run select(view.inspector, "query", nodeRole, "label", label)
+  }
+
+  effect fn firstNode(reply: &Value) -> Option<Value>
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let nodes = run J.items(run J.field(reply, "nodes"))
+    if nodes.length == 0 {
+      return Option<Value>.none()
+    }
+    return Option<Value>.some(run Json.copy(&nodes[0]))
+  }
+
+  effect fn reveal(view: &View<'_>, node: &Value) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    run scrollBy(view, J.real(node, "y") - view.height * 0.5)
+  }
+
+  effect fn scrollBy(view: &View<'_>, dy: f64) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    run scroll(view.inspector, view.width - 80.0, view.height * 0.6, 0.0, dy, &[])
+  }
+
+  // Controls in the bottom of the inspector panel scroll into view before they are used.
+  effect fn click(view: &View<'_>, label: string, nodeRole: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let reply = run query(view, nodeRole, label)
+    if let Option<Value>.Some { value: node } = move run firstNode(&reply) {
+      if J.real(&node, "x") > view.width - 255.0 && J.real(&node, "y") > view.height - 60.0 {
+        run reveal(view, &node)
+      }
+    }
+    drop run select(view.inspector, "click", nodeRole, "label", label)
+  }
+
+  effect fn button(view: &View<'_>, label: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    run click(view, label, "button")
+  }
+
+  effect fn edit(view: &View<'_>, label: string, value: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let reply = run query(view, "textbox", label)
+    match move run firstNode(&reply) {
+      Option<Value>.Some { value: node } => {
+        let y = J.real(&node, "y")
+        if J.real(&node, "x") > view.width - 255.0 && (y < 110.0 || y > view.height - 60.0) {
+          run reveal(view, &node)
+        }
+      }
+      Option<Value>.None => run Task.abort(label)
+    }
+    run click(view, label, "textbox")
+    run press(view.inspector, "a", &[primary()])
+    run press(view.inspector, "Backspace", &[])
+    if value != "" {
+      run typeText(view.inspector, value)
+    }
+    run press(view.inspector, "Enter", &[])
+  }
+
+  /// The last quoted value in a textbox snapshot.
+  effect fn value(view: &View<'_>, label: string) -> String
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let text = run snapshot(view.inspector, "textbox", "label", label)
+    let bytes = String.utf8Bytes(String.view(&text))
+    let mut last = Option<String>.none()
+    let mut at: usize = 0
+    while at < bytes.length {
+      if bytes[at] == 34 {
+        let begin = at + 1
+        let mut end = begin
+        while end < bytes.length && bytes[end] != 34 {
+          if bytes[end] == 92 {
+            end = end + 1
+          }
+          end = end + 1
+        }
+        if end >= bytes.length {
+          break
+        }
+        last = Option<String>.some(
+          run String.copy(String.slice(String.view(&text), begin, end - begin)),
+        )
+        at = end + 1
+      } else {
+        at = at + 1
+      }
+    }
+    return match move last {
+      Option<String>.Some { value: found } => move found
+      Option<String>.None => run Task.abort(String.view(&text))
+    }
+  }
+
+  effect fn valueIs(view: &View<'_>, label: string, expected: string, message: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let actual = run value(view, label)
+    run expect(String.view(&actual) == expected, message)
+  }
+
+  effect fn count(view: &View<'_>, nodeRole: string, label: string) -> i64
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let reply = run query(view, nodeRole, label)
+    return J.whole(&reply, "count")
+  }
+
+  effect fn capture(view: &View<'_>, name: string) -> ()
+    ! TaskError | FileError | OutOfMemoryError | WriterError
+    ? &mut Allocator | &mut FileSystem {
+    // Move away so incidental tooltips do not obscure the captured state.
+    run pointer(view.inspector, "move", view.width * 0.5, 100.0)
+    let mut shot = run request("screenshot")
+    run J.set(&mut shot, "maxWidth", J.integer(1280))
+    let reply = run ask(view.inspector, &shot)
+    let png = run decodePng(&reply)
+    let mut picture = run String.copy(name)
+    run String.append(&mut picture, ".png")
+    let picturePath = run Path.join(view.output, String.view(&picture))
+    run FileSystem.writeFile(&picturePath, Bytes.asSlice(&png))
+    let text = run snapshot(view.inspector, "", "", "")
+    let mut snapshotName = run String.copy(name)
+    run String.append(&mut snapshotName, ".txt")
+    let snapshotPath = run Path.join(view.output, String.view(&snapshotName))
+    run FileSystem.writeFile(&snapshotPath, String.utf8Bytes(String.view(&text)))
+  }
+
+  effect fn canvas(view: &View<'_>) -> Value
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut selector = run request("query")
+    run J.setText(&mut selector, "testId", "canvas")
+    let reply = run ask(view.inspector, &selector)
+    return match move run firstNode(&reply) {
+      Option<Value>.Some { value: node } => move node
+      Option<Value>.None => run Task.abort("No canvas node")
+    }
+  }
+
+  effect fn swatches(view: &View<'_>) -> List<String>
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let mut selector = run request("query")
+    run J.setText(&mut selector, "role", "button")
+    run J.setText(&mut selector, "label", "Swatch")
+    let reply = run ask(view.inspector, &selector)
+    let nodes = run J.items(run J.field(&reply, "nodes"))
+    let mut names = List<String>.make()
+    let mut at: usize = 0
+    while at < nodes.length {
+      let name = J.textOf(&nodes[at], "name")
+      if String.startsWith(name, "Swatch ") {
+        run names.append(run String.copy(name))
+      }
+      at = at + 1
+    }
+    return move names
+  }
+
+  fn sameNames(a: &List<String>, b: &List<String>) -> bool {
+    let left = a.asSlice()
+    let right = b.asSlice()
+    if left.length != right.length {
+      return false
+    }
+    let mut at: usize = 0
+    while at < left.length {
+      if String.view(&left[at]) != String.view(&right[at]) {
+        return false
+      }
+      at = at + 1
+    }
+    return true
+  }
+
+  effect fn multiple(view: &View<'_>) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let text = run snapshot(view.inspector, "", "", "")
+    run expect(
+      String.contains(String.view(&text), "2 layers selected"),
+      "Expected two selected layers",
+    )
+  }
+
+  effect fn numeric(text: &String) -> f64
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    return match Format.f64Value(String.view(text)) {
+      Result<f64, ParseError>.Success { value } => value
+      Result<f64, ParseError>.Failure { .. } => run Task.abort("Expected a numeric field")
+    }
+  }
+
+  pub effect fn check(app: string, artifacts: string) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    let program = run binary(app)
+    let root = run outputDirectory(artifacts, "build/native-parity")
+    let sizes: [[i64; 2]; 2] = [[1440, 960], [1000, 700]]
+    let mut at: usize = 0
+    while at < sizes.length {
+      let width = sizes[at][0]
+      let height = sizes[at][1]
+      let label = run size(width, height)
+      let output = run Path.join(&root, String.view(&label))
+      run FileSystem.createDirectoriesRecursively(&output)
+      let directory = run temporary("studio-parity-")
+      let result = run Effect.result(
+        session(String.view(&program), width, height, &output, &directory),
+      )
+      run remove(&directory)
+      match move result {
+        Result<
+          (),
+          TaskError | FileError | HostInputError | OutOfMemoryError | WriterError
+        >.Success {
+          ..
+        } => {}
+        Result<
+          (),
+          TaskError | FileError | HostInputError | OutOfMemoryError | WriterError
+        >.Failure {
+          error
+        } => {
+          fail move error
+        }
+      }
+      at = at + 1
+    }
+  }
+
+  effect fn size(width: i64, height: i64) -> String
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    return run J.format("{width}x{height}", &.{ width: width, height: height })
+  }
+
+  effect fn session(program: string, width: i64, height: i64, output: &Path, directory: &Path) -> ()
+    ! TaskError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    let fixture = run rootPath("modules/tests/explorations.silkdesign")
+    let document = run Path.join(directory, "review.silkdesign")
+    let bytes = run FileSystem.readFile(&fixture)
+    run FileSystem.writeFile(&document, Bytes.asSlice(&bytes))
+    let socket = run Path.join(directory, "ui.sock")
+    let log = run Path.join(output, "app.log")
+    let widthFlag = run J.format("--width={width}", &.{ width: width })
+    let heightFlag = run J.format("--height={height}", &.{ height: height })
+    let mut child = run startApp(
+      program,
+      &["--inspect", String.view(&widthFlag), String.view(&heightFlag), pathText(&document)],
+      &socket,
+      &log,
+      false,
+    )
+    let inspector = run make(&socket, 45000)
+    drop run ready(&mut child, &inspector, &log, 40000, true)
+    let view = View {
+      inspector: &inspector,
+      width: i64.toF64(width),
+      height: i64.toF64(height),
+      output: output,
+    }
+    run interactions(&view)
+    let summary = run J.format(
+      "PASS: {width}x{height} parity interactions and captures",
+      &.{ width: width, height: height },
+    )
+    run say(String.view(&summary))
+    stop(&mut child)
+  }
+
+  effect fn interactions(view: &View<'_>) -> ()
+    ! TaskError | FileError | OutOfMemoryError | WriterError
+    ? &mut Allocator | &mut FileSystem {
+    let wide = view.width > 1100.0
+    let mut c = run canvas(view)
+    run expect(
+      J.real(&c, "x")
+        == (if wide {
+          224.0
+        } else {
+          190.0
+        }),
+      "Canvas left edge does not match the browser layout",
+    )
+    run expect(
+      J.real(&c, "width")
+        == view.width
+          - (if wide {
+            476.0
+          } else {
+            415.0
+          }),
+      "Canvas width does not match the browser layout",
+    )
+    run capture(view, "page")
+    run button(view, "Collapse layer")
+    let mut expand = run request("query")
+    run J.setText(&mut expand, "label", "Expand layer")
+    run J.set(&mut expand, "exact", J.boolean(true))
+    let expanded = run ask(view.inspector, &expand)
+    run expect(
+      J.whole(&expanded, "count") == 1,
+      "Collapse layer must leave one Expand layer control",
+    )
+    let mut layerName = run request("query")
+    run J.setText(&mut layerName, "label", "Layer name")
+    run J.set(&mut layerName, "exact", J.boolean(true))
+    let named = run ask(view.inspector, &layerName)
+    run expect(J.whole(&named, "count") == 0, "A collapsed layer must not show its name field")
+    run button(view, "Expand layer")
+    run edit(view, "Find a layer", "sUN")
+    run button(view, "Sun")
+    run valueIs(view, "Width", "112", "Sun width")
+    run edit(view, "Find a layer", "")
+    run capture(view, "ellipse")
+    run edit(view, "Width", "160")
+    run valueIs(view, "Width", "160", "Edited width")
+    run button(view, "Undo")
+    run valueIs(view, "Width", "112", "Undone width")
+    run edit(view, "Fill", "112233")
+    run valueIs(view, "Fill", "112233", "Edited fill")
+    run button(view, "Undo")
+    run valueIs(view, "Fill", "E6B84E", "Undone fill")
+    run button(view, "Fill color")
+    run capture(view, "color")
+    run click(view, "Red", "slider")
+    run press(view.inspector, "Home", &[])
+    run press(view.inspector, "End", &[])
+    run press(view.inspector, "Escape", &[])
+    run valueIs(view, "Fill", "FFB84E", "Picker fill")
+    run button(view, "Undo")
+    run valueIs(view, "Fill", "E6B84E", "Picker changes must be one history entry")
+    run button(view, "Commands")
+    run edit(view, "Search commands", "dUPLICATE selection")
+    run valueIs(view, "Layer name", "Sun", "Duplicated layer name")
+
+    // Enter in edit() executed the first matching command.
+    run edit(view, "Find a layer", "Sun")
+    run expect((run count(view, "button", "Sun")) == 2, "Duplicate selection must add a second Sun")
+    run button(view, "Undo")
+    run edit(view, "Find a layer", "")
+    run button(view, "Commands")
+    run click(view, "Search commands", "textbox")
+    run typeText(view.inspector, "fit")
+    run capture(view, "commands")
+    run press(view.inspector, "Escape", &[])
+    run valueIs(view, "Layer name", "Sun", "Closing a menu must retain selection")
+    let commands = run query(view, "button", "Commands")
+    let trigger = match move run firstNode(&commands) {
+      Option<Value>.Some { value: node } => move node
+      Option<Value>.None => run Task.abort("No Commands button")
+    }
+    run expect(J.truth(&trigger, "focused"), "Dialog restores trigger focus")
+    run button(view, "Keyboard shortcuts")
+    run capture(view, "shortcuts")
+    run press(view.inspector, "Escape", &[])
+    run button(view, "File")
+    run capture(view, "file")
+    run press(view.inspector, "Escape", &[])
+    run edit(view, "Find a layer", "Sun")
+    run button(view, "Hide Sun")
+    run expect((run count(view, "button", "Show Sun")) == 1, "Hide Sun must offer Show Sun")
+    run button(view, "Undo")
+    run button(view, "Lock Sun")
+    run expect((run count(view, "button", "Unlock Sun")) == 1, "Lock Sun must offer Unlock Sun")
+    run button(view, "Undo")
+    run edit(view, "Find a layer", "Explore button")
+    run button(view, "Explore button")
+    let properties = [
+      ["Stroke width", "3", "property-stroke-width"],
+      ["Layer blur", "2", "property-layer-blur"],
+      ["Backdrop blur", "4", "property-backdrop-blur"],
+      ["Brightness %", "120", "property-brightness-percent"],
+      ["Shadow blur", "8", "property-shadow-blur"],
+      ["Inner blur", "3", "property-inner-blur"],
+    ]
+    let mut index: usize = 0
+    while index < properties.length {
+      let property = properties[index]
+      let before = run value(view, property[0])
+      run edit(view, property[0], property[1])
+      run valueIs(view, property[0], property[1], property[0])
+      run capture(view, property[2])
+      run button(view, "Undo")
+      run valueIs(view, property[0], String.view(&before), property[0])
+      index = index + 1
+    }
+    run scrollBy(view, -10000.0)
+    run edit(view, "Find a layer", "Make room")
+    run button(view, "Make room")
+    run capture(view, "typography")
+    run button(view, "Font family")
+    run press(view.inspector, "ArrowDown", &[])
+    run press(view.inspector, "Enter", &[])
+    run button(view, "Undo")
+    run button(view, "Font weight")
+    run press(view.inspector, "End", &[])
+    run press(view.inspector, "Enter", &[])
+    run button(view, "Undo")
+    run edit(view, "Find a layer", "")
+    run edit(view, "Zoom percentage", "100")
+    run valueIs(view, "Zoom percentage", "100%", "Zoom percentage")
+    run button(view, "Fit")
+    c = run canvas(view)
+    let canvasWidth = J.real(&c, "width")
+    let canvasHeight = J.real(&c, "height")
+    let zoom = f64.min(2.0, f64.min((canvasWidth - 120.0) / 860.0, (canvasHeight - 160.0) / 560.0))
+    let left = J.real(&c, "x") + (canvasWidth - 860.0 * zoom) * 0.5
+    let top = 56.0 + (canvasHeight - 560.0 * zoom) * 0.5
+    let x = left + 120.0 * zoom
+    let y = top + 150.0 * zoom
+    run pointerCount(view.inspector, "down", x, y, 2)
+    run pointerCount(view.inspector, "up", x, y, 2)
+    run expect(
+      (run count(view, "textbox", "Edit text")) == 1,
+      "Double click must open text editing",
+    )
+    run click(view, "Edit text", "textbox")
+    run press(view.inspector, "a", &[primary()])
+    run typeText(view.inspector, "Do not commit this")
+    run press(view.inspector, "Escape", &[])
+    run valueIs(view, "Text", "Make room", "Escape must cancel text editing")
+    run capture(view, "text-cancelled")
+    run edit(view, "Find a layer", "Swatch")
+    run button(view, "Swatch 1")
+    run key(view.inspector, "down", "Shift", "ShiftLeft")
+    run button(view, "Swatch 2")
+    run key(view.inspector, "up", "Shift", "ShiftLeft")
+    run multiple(view)
+    run capture(view, "multi-selection")
+    let before = run value(view, "X")
+    run button(view, "Align left")
+    run button(view, "Undo")
+    run valueIs(view, "X", String.view(&before), "Undone alignment")
+    run multiple(view)
+    let beforeX = run value(view, "X")
+    let startX = run numeric(&beforeX)
+    run press(view.inspector, "ArrowRight", &[])
+    let movedX = run value(view, "X")
+    run expect((run numeric(&movedX)) == startX + 1.0, "ArrowRight must nudge by one unit")
+    run button(view, "Undo")
+    run press(view.inspector, "c", &[primary()])
+    run press(view.inspector, "x", &[primary()])
+    run expect((run count(view, "button", "Swatch 1")) == 0, "Cut must remove the selection")
+    run press(view.inspector, "v", &[primary()])
+    run expect((run count(view, "button", "Swatch 1")) == 1, "Paste must restore the selection")
+    run button(view, "Undo")
+    run button(view, "Undo")
+    run multiple(view)
+    run press(view.inspector, "g", &[primary()])
+    run capture(view, "group")
+    run valueIs(view, "Layer name", "Group", "Grouped layer name")
+    run press(view.inspector, "g", &[primary(), "shift"])
+    run multiple(view)
+    run button(view, "Undo")
+    run button(view, "Undo")
+    let beforeOrder = run swatches(view)
+    run press(view.inspector, "]", &[primary()])
+    let raised = run swatches(view)
+    run expect(!sameNames(&raised, &beforeOrder), "Bring forward must change the layer order")
+    run button(view, "Undo")
+    let restored = run swatches(view)
+    run expect(sameNames(&restored, &beforeOrder), "Undo must restore the layer order")
+    run pointer(view.inspector, "down", J.real(&c, "x") + 20.0, 100.0)
+    run pointer(view.inspector, "up", J.real(&c, "x") + 20.0, 100.0)
+    run press(view.inspector, "Tab", &[])
+    let hidden = run canvas(view)
+    run expect(
+      J.real(&hidden, "x") == 0.0 && J.real(&hidden, "width") == view.width,
+      "Tab must hide both panels",
+    )
+    run capture(view, "panels-hidden")
+    run press(view.inspector, "Tab", &[])
+    let shown = run canvas(view)
+    run expect(J.real(&shown, "x") == J.real(&c, "x"), "Tab must restore the panels")
+    run edit(view, "Find a layer", "no matching layer")
+    run capture(view, "empty-search")
+    let empty = run snapshot(view.inspector, "", "", "")
+    run expect(
+      String.contains(String.view(&empty), "No matching layers"),
+      "Empty search must say so",
+    )
+    run edit(view, "Find a layer", "")
+    run button(view, "Add page")
+    let page = run value(view, "Page name")
+    run expect(String.view(&page) != "Explorations", "Add page must select the new page")
+    run capture(view, "new-page")
+    run button(view, "Delete this page")
+    run valueIs(view, "Page name", "Explorations", "Deleting the page returns to Explorations")
+  }
+}

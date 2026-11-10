@@ -3,7 +3,7 @@
 //! finds it again; the first visit opens the starter design. There are no native menus or file
 //! dialogs, so opening, saving as and exporting files are the desktop app's; shortcuts work.
 //!
-//!   node scripts/browser serve
+//!   silk task browser serve
 //!
 //! With `?check` in the page's address it runs the window host's rendering check, like the
 //! native app's `--check`: it clicks Rectangle, presses Tab and compares the canvas with the CPU
@@ -11,8 +11,11 @@
 static if Intrinsic.targetArchitecture() == "wasm32" {
   // These two modules must be in the program's own package: a dependency exports no wasm
   // symbols.
-  import generated_webgpu_exports
-  import libm
+  // Imported only for the WebGPU symbols it exports to the wasm32 host.
+  import generated_webgpu_exports as _generated_webgpu_exports
+
+  // Imported only for the C math symbols it exports to the wasm32 runtime.
+  import libm as _libm
   import studio.model { Studio, Message }
   import studio.render { Canvas, textResources }
   import studio.editing as editing
@@ -32,7 +35,10 @@ static if Intrinsic.targetArchitecture() == "wasm32" {
   import ui_tree_window.lib { feed }
   import ui_inspect_server.lib { Inspector }
   import ui_fixtures.fixtures as fixtures
-  import ui_tree.lib { UiTree, TreeError, Batch, FrameInput, CpuSnapshot }
+  import ui_tree.lib { Batch }
+  import ui_tree.engine { UiTree, TreeError }
+  import ui_tree.node { FrameInput }
+  import ui_tree.inspect { CpuSnapshot }
   import ui_scene.scene { Scene }
   import atlas.atlas { Atlas, AtlasError }
   import vector.geometry_error { GeometryError }

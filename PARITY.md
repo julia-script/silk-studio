@@ -34,8 +34,8 @@ Visual comparison: same browser starter, fitted camera and matching 1440×960 an
 1000×700 logical viewports. Reviewed page, shape, typography, command palette,
 shortcuts, file menu, color picker, scrolled effect sections, multiple selection,
 hidden panels and empty search. Native captures and semantic snapshots are
-reproducible with `node scripts/parity-check` under `build/native-parity`.
-The Node runner copies the fixture into a fresh temporary document for each
+reproducible with `silk task native parity` under `build/native-parity`.
+The task copies the fixture into a fresh temporary document for each
 viewport, sends the same inspector input, retains screenshots/semantic snapshots,
 and terminates the app before removing the temporary document. Use
 `--app "$PWD/build/Silk Studio.app/Contents/MacOS/SilkStudio"` to exercise the

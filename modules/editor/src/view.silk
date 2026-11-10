@@ -12,7 +12,9 @@ import commands
 import icons
 import layers { Row }
 import layers
-import ui_tree.lib { Batch, UiTree, NONE }
+import ui_tree.lib { Batch }
+import ui_tree.engine { UiTree }
+import ui_tree.node { NONE }
 import ui_tree.mutation { NodeKind, LISTEN_CLICK, LISTEN_POINTER_DOWN, NOT_FOCUSABLE }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import ui_app.heap { Heap }
@@ -471,6 +473,10 @@ fn number(ui: &mut Ui<Message>, t: &Theme, m: &Studio, label: string, key: u32, 
           ui.grow(1.0)
           ui.fontSize(11.0)
           ui.style(&[Property.MinWidth { value: Length.px(0.0) }])
+
+          // numberInput answers Enter, Escape and the arrows first; every other key edits the
+          // field, so it must not reach the canvas shortcuts (Primary+A, Backspace) on the root.
+          ui.onKeyDown(|event| Reply<Message>.Stop)
         },
       )
     },

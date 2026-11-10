@@ -1,0 +1,100 @@
+//! The browser editor, built and driven by the pinned lib-ui browser tasks and runtime assets.
+import silk.cli.command { Command, CommandLine, Opt }
+import silk.cli.task { TaskError, TaskSet }
+import silk.collections.list { List }
+import silk.io.writer { WriterError }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { String }
+import silk.collections.slice { Slice }
+import silk.num.u16
+import silk.num.usize
+import task_support { rootPath, pathText, uiTask }
+
+pub union Tasks {
+  Build { pub debug: bool },
+  Serve { pub debug: bool, pub port: u16 },
+  Test { pub debug: bool, pub options: List<String> },
+}
+
+impl CommandLine for Tasks {
+  static fn command() -> Command<Tasks> {
+    return Command<Tasks>.make(
+      "browser",
+      "WebAssembly editor with WebGPU and JSPI (Chrome or Edge 137+)",
+    )
+      |> Command.variant("Build", "Build the wasm module with an 8 MiB stack and print its path")
+      |> Command.variant("Serve", "Build and serve the editor on a loopback port")
+      |> Command.variant(
+        "Test",
+        "Reference, click, wheel and localStorage reload in Chromium; lib-ui test options follow --",
+      )
+      |> Command.option("debug", Opt.about("Build without optimization"))
+      |> Command.option("port", Opt.about("Loopback HTTP port") |> Opt.default("8050"))
+      |> Command.arg(
+        "options",
+        Opt.about(
+          "Options for lib-ui's browser test, such as --width 1280 --height 800 --click --click-x 603 --click-y 723 --stored studio",
+        ),
+      )
+  }
+}
+
+effect fn delegate(command: string, debug: bool, extra: &[string]) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let package = run rootPath("modules/browser")
+  let mut words = List<string>.make()
+  run words.append("browser")
+  run words.append(command)
+  run words.append("--package")
+  run words.append(pathText(&package))
+  if debug {
+    run words.append("--debug")
+  }
+  run words.appendSlice(extra)
+  run uiTask(words.asSlice())
+}
+
+impl TaskSet for Tasks {
+  effect fn perform(self: Tasks) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    match move self {
+      Tasks.Build { debug } => run delegate("build", debug, &[])
+      Tasks.Serve { debug, port } => {
+        let digits = run decimal(u16.toUsize(port))
+        run delegate("serve", debug, &["--port", String.view(&digits)])
+      }
+      Tasks.Test { debug, options } => {
+        let mut words = List<string>.make()
+        let items = options.asSlice()
+        let mut at: usize = 0
+        while at < items.length {
+          run words.append(String.view(&items[at]))
+          at = at + 1
+        }
+        run delegate("test", debug, words.asSlice())
+      }
+    }
+  }
+}
+
+effect fn decimal(number: usize) -> String
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut buffer: [u8; 24] = [0; 24]
+  let mut index: usize = 24
+  let mut left = number
+  while true {
+    index = index - 1
+    buffer[index] = usize.toU8(left % 10) + 48
+    left = left / 10
+    if left == 0 {
+      break
+    }
+  }
+  return run String.copy(unsafe String.fromUtf8Unchecked(Slice.view(&buffer, index, 24 - index)))
+}

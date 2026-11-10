@@ -1,0 +1,347 @@
+//! Drives an isolated release Studio through its inspector: no OS clicks or model shortcuts.
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  import silk.cli.task { Task, TaskError }
+  import silk.collections.bytes { Bytes }
+  import silk.collections.list { List }
+  import silk.core.effect { Effect }
+  import silk.core.result { Result }
+  import silk.io.writer { WriterError }
+  import silk.json.value { Value }
+  import silk.mem.allocator { Allocator, OutOfMemoryError }
+  import silk.system.child_process { ChildProcess, ProcessError }
+  import silk.system.filesystem { FileError, FileSystem, Path }
+  import silk.system.host_input { HostInput, HostInputError }
+  import silk.text.string { String }
+  import silk.num.i64
+  import silk.num.u8
+  import task_inspector {
+    Inspector,
+    make,
+    ask,
+    request,
+    simple,
+    frame,
+    pointer,
+    key,
+    pressCode,
+    typeText,
+    select,
+    decodePng,
+    primary
+  }
+  import task_json as J
+  import task_native { say, userPath }
+  import task_process { Process, launch, start, send, closeInput, finish, waitExit, stop }
+  import task_session { binary, outputDirectory, temporary, remove, ready, expect, sleep, startApp }
+  import task_support { build, pathText, repositoryRoot }
+
+  pub struct Options<'a> {
+    pub app: string<'a>,
+    pub cli: string<'a>,
+    pub mcp: string<'a>,
+    pub artifacts: string<'a>,
+    pub stress: bool
+  }
+
+  effect fn tool(explicit: string, package: string) -> String
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    if explicit != "" {
+      let path = run userPath(explicit)
+      return run String.copy(pathText(&path))
+    }
+    let ui = run repositoryRoot("lib-ui")
+    let path = run Path.join(&ui, package)
+    return run build(pathText(&path), true, false)
+  }
+
+  effect fn click(inspector: &Inspector, name: string) -> ()
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    drop run select(inspector, "click", "button", "name", name)
+  }
+
+  effect fn labelled(command: string, nodeRole: string, label: string) -> Value
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    let mut value = run request(command)
+    run J.setText(&mut value, "role", nodeRole)
+    run J.setText(&mut value, "label", label)
+    return move value
+  }
+
+  effect fn width(inspector: &Inspector) -> String
+    ! TaskError | OutOfMemoryError | WriterError
+    ? &mut Allocator {
+    let value = run labelled("snapshot", "textbox", "Width")
+    let reply = run ask(inspector, &value)
+    return run String.copy(J.textOf(&reply, "text"))
+  }
+
+  /// Ten canvas frames, 100 ms apart, as a five-column contact sheet.
+  effect fn capture(
+    cli: string,
+    socket: &Path,
+    artifacts: &Path,
+    image: string,
+    output: string,
+  ) -> Process
+    ! TaskError | FileError | HostInputError | OutOfMemoryError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    let picture = run Path.join(artifacts, image)
+    let log = run Path.join(artifacts, output)
+    return run launch(
+      cli,
+      &[
+        "--connect",
+        pathText(socket),
+        "capture",
+        pathText(&picture),
+        "--count",
+        "10",
+        "--interval",
+        "100",
+        "--columns",
+        "5",
+        "--tile-width",
+        "480",
+        "--test-id",
+        "canvas",
+      ],
+      &[],
+      &log,
+      false,
+    )
+  }
+
+  effect fn captured(process: &mut Process, log: &Path) -> ()
+    ! TaskError | FileError | OutOfMemoryError
+    ? &mut Allocator | &mut FileSystem {
+    if (run waitExit(&mut process.*, 45000)) != 0 {
+      let bytes = run FileSystem.readFile(log)
+      let text = run J.text(move bytes)
+      run Task.abort(String.view(&text))
+    }
+  }
+
+  pub effect fn check(options: &Options<'_>) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    let program = run binary(options.app)
+    let cli = run tool(options.cli, "modules/inspect/cli")
+    let mcp = run tool(options.mcp, "modules/inspect/mcp")
+    let artifacts = run outputDirectory(options.artifacts, "build/native-inspector-check")
+    let directory = run temporary("silk-inspect-")
+    let result = run Effect.result(
+      exercise(
+        String.view(&program),
+        String.view(&cli),
+        String.view(&mcp),
+        &artifacts,
+        &directory,
+        options.stress,
+      ),
+    )
+    run remove(&directory)
+    match move result {
+      Result<(), TaskError | FileError | HostInputError | OutOfMemoryError | WriterError>.Success {
+        ..
+      } => {}
+      Result<(), TaskError | FileError | HostInputError | OutOfMemoryError | WriterError>.Failure {
+        error
+      } => {
+        fail move error
+      }
+    }
+  }
+
+  effect fn exercise(
+    program: string,
+    cli: string,
+    mcp: string,
+    artifacts: &Path,
+    directory: &Path,
+    stress: bool,
+  ) -> ()
+    ! TaskError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    let socket = run Path.join(directory, "ui.sock")
+    let document = run Path.join(directory, "test.silkdesign")
+    let log = run Path.join(artifacts, "app.log")
+    let mut child = run startApp(program, &["--inspect", pathText(&document)], &socket, &log, false)
+    let inspector = run make(&socket, 30000)
+    drop run ready(&mut child, &inspector, &log, 30000, true)
+
+    run pointer(&inspector, "down", 250.0, 100.0)
+    let sequence = run Path.join(artifacts, "sequence.txt")
+    let mut recording = run capture(cli, &socket, artifacts, "marquee.png", "sequence.txt")
+    let mut frames = List<i64>.make()
+    let mut index: i64 = 0
+    while index < 10 {
+      run pointer(
+        &inspector,
+        "move",
+        310.0 + i64.toF64(index) * 55.0,
+        125.0 + i64.toF64(index) * 2.0,
+      )
+      run frames.append(run frame(&inspector))
+      let layers = run select(&inspector, "query", "textbox", "label", "Layer name")
+      run expect(J.whole(&layers, "count") == 0, "Expected an empty marquee")
+      sleep(100)
+      index = index + 1
+    }
+    run pointer(&inspector, "up", 805.0, 143.0)
+    run captured(&mut recording, &sequence)
+    let seen = frames.asSlice()
+    let mut at: usize = 1
+    while at < seen.length {
+      run expect(seen[at] > seen[at - 1], "Each marquee move must compose a new frame")
+      at = at + 1
+    }
+    run expect((run frame(&inspector)) > seen[seen.length - 1], "Release did not repaint")
+    run say("PASS: empty marquee advances on all ten moves and clears on release")
+
+    run key(&inspector, "down", " ", "Space")
+    run pointer(&inspector, "down", 500.0, 140.0)
+    run pointer(&inspector, "move", 570.0, 160.0)
+    run pointer(&inspector, "up", 570.0, 160.0)
+    run key(&inspector, "up", " ", "Space")
+    run click(&inspector, "Fit")
+    run click(&inspector, "Rectangle")
+    run pointer(&inspector, "down", 450.0, 300.0)
+    run pointer(&inspector, "move", 560.0, 380.0)
+    run pointer(&inspector, "up", 560.0, 380.0)
+    let original = run width(&inspector)
+    let field = run labelled("click", "textbox", "Width")
+    drop run ask(&inspector, &field)
+    run pressCode(&inspector, "a", "KeyA", &[primary()])
+    run typeText(&inspector, "240")
+    run pressCode(&inspector, "Enter", "", &[])
+    let edited = run width(&inspector)
+    run expect(String.contains(String.view(&edited), "\"240\""), "Width entry did not commit 240")
+    run click(&inspector, "Undo")
+    let undone = run width(&inspector)
+    run expect(String.view(&undone) == String.view(&original), "Undo did not restore the width")
+    run say("PASS: held Space, creation, focused text entry, commit and undo")
+
+    let handles = run select(&inspector, "query", "", "label", "Resize handle")
+    let nodes = run J.items(run J.field(&handles, "nodes"))
+    run expect(nodes.length != 0, "No resize handles")
+    let mut corner: usize = 0
+    let mut best = J.real(&nodes[0], "x") + J.real(&nodes[0], "y")
+    let mut scan: usize = 1
+    while scan < nodes.length {
+      let total = J.real(&nodes[scan], "x") + J.real(&nodes[scan], "y")
+      if total > best {
+        best = total
+        corner = scan
+      }
+      scan = scan + 1
+    }
+    let x = J.real(&nodes[corner], "x") + J.real(&nodes[corner], "width") * 0.5
+    let y = J.real(&nodes[corner], "y") + J.real(&nodes[corner], "height") * 0.5
+    run pointer(&inspector, "down", x, y)
+    let resizeLog = run Path.join(artifacts, "resize-sequence.txt")
+    let mut resizing = run capture(cli, &socket, artifacts, "resize.png", "resize-sequence.txt")
+    index = 0
+    while index < 10 {
+      run pointer(
+        &inspector,
+        "move",
+        x + i64.toF64(index + 1) * 8.0,
+        y + i64.toF64(index + 1) * 5.0,
+      )
+      sleep(100)
+      index = index + 1
+    }
+    run pointer(&inspector, "up", x + 80.0, y + 50.0)
+    run captured(&mut resizing, &resizeLog)
+    let resized = run width(&inspector)
+    run expect(String.view(&resized) != String.view(&original), "Resize did not change the width")
+    run click(&inspector, "Undo")
+    let restored = run width(&inspector)
+    run expect(String.view(&restored) == String.view(&original), "Undo did not restore the resize")
+    run say("PASS: resize handles, ten-frame capture, and undo through real input")
+
+    let shot = run simple(&inspector, "screenshot")
+    let png = run decodePng(&shot)
+    let studio = run Path.join(artifacts, "studio.png")
+    run FileSystem.writeFile(&studio, Bytes.asSlice(&png))
+    run mcpCapture(mcp, &socket, artifacts)
+    run say("PASS: MCP returns an actual PNG mosaic and sample timing metadata")
+
+    if stress {
+      run click(&inspector, "Commands")
+      run click(&inspector, "Add 100k rectangles")
+      run pressCode(&inspector, "Escape", "", &[])
+      run click(&inspector, "Select")
+      run pointer(&inspector, "down", 250.0, 100.0)
+      let mut previous = run frame(&inspector)
+      let points = [[500.0, 350.0], [700.0, 600.0], [1050.0, 850.0], [260.0, 110.0], [275.0, 115.0]]
+      let mut step: usize = 0
+      while step < points.length {
+        run pointer(&inspector, "move", points[step][0], points[step][1])
+        let current = run frame(&inspector)
+        run expect(current > previous, "100k marquee stopped updating")
+        previous = current
+        step = step + 1
+      }
+      run pointer(&inspector, "up", 275.0, 115.0)
+      run say("PASS: 100k page marquee, including the transition back to empty")
+    }
+    let mut recorded = J.array()
+    at = 0
+    while at < seen.length {
+      run J.push(&mut recorded, J.integer(seen[at]))
+      at = at + 1
+    }
+    let framesPath = run Path.join(artifacts, "frames.json")
+    let encoded = run J.compact(&recorded)
+    run FileSystem.writeFile(&framesPath, Bytes.asSlice(&encoded))
+    let mut message = run String.copy("Artifacts: ")
+    run String.append(&mut message, pathText(artifacts))
+    run say(String.view(&message))
+    stop(&mut child)
+  }
+
+  /// One MCP `ui_capture` call must answer an actual three-tile PNG mosaic and its timings.
+  effect fn mcpCapture(mcp: string, socket: &Path, artifacts: &Path) -> ()
+    ! TaskError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    let mut process = run start(mcp, &["--connect", pathText(socket)], &[], true, true, false)
+    run send(
+      &mut process,
+      b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ui_capture\",\"arguments\":{\"count\":3,\"intervalMs\":100,\"columns\":3,\"tileWidth\":320,\"testId\":\"canvas\"}}}\n",
+      45000,
+    )
+    closeInput(&mut process)
+    let output = run finish(&mut process, 45000)
+    run expect(output.code == 0, "MCP exited with an error")
+    let reply = run J.parse(Bytes.asSlice(&output.output))
+    let response = run J.field(&reply, "result")
+    run expect(!J.truth(response, "isError"), "MCP ui_capture reported an error")
+    let content = run J.items(run J.field(response, "content"))
+    run expect(content.length >= 2, "MCP capture is missing image or timing content")
+    run expect(
+      J.textOf(&content[0], "type") == "image" && J.textOf(&content[0], "mimeType") == "image/png",
+      "MCP capture is not a PNG image",
+    )
+    let mut wrapped = J.object()
+    run J.setText(&mut wrapped, "png", J.textOf(&content[0], "data"))
+    let png = run decodePng(&wrapped)
+    let bytes = Bytes.asSlice(&png)
+    run expect(bytes.length > 24, "MCP mosaic is too short to be a PNG")
+    let mosaicWidth = u8.toI64(bytes[16]) * 16777216 + u8.toI64(bytes[17]) * 65536
+      + u8.toI64(bytes[18]) * 256
+      + u8.toI64(bytes[19])
+    run expect(
+      mosaicWidth == (320 + 8) * 3 + 8,
+      "MCP mosaic width does not match three 320-pixel tiles",
+    )
+    let mosaic = run Path.join(artifacts, "mcp-mosaic.png")
+    run FileSystem.writeFile(&mosaic, bytes)
+    let timings = run Path.join(artifacts, "mcp-timings.txt")
+    run FileSystem.writeFile(&timings, String.utf8Bytes(J.textOf(&content[1], "text")))
+  }
+}

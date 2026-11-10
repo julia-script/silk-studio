@@ -9,23 +9,22 @@ permissions:
 concurrency:
   group: Studio-${{ github.ref }}
   cancel-in-progress: true
-env:
-  SILK_HOME: ${{ github.workspace }}/.silk-home
 jobs:
   cpu:
-    name: Linux contracts and CPU workloads
+    name: Formatting, generated sources, contracts and CPU workloads
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux window headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libx11-dev libxkbcommon-dev libwayland-dev wayland-protocols libglfw3-dev libvulkan1
       - uses: ./.github/actions/setup-silk
-      - name: Check hand-maintained source formatting
-        run: node scripts/check-format.mjs
-      - name: Studio contracts and release CPU workload timings
+      - run: silk task setup-ci
+      - name: Formatting, embedded assets, browser exports, contracts and release CPU timings
         shell: bash
         run: |
           mkdir -p build/test-results
-          node scripts/test --release 2>&1 | tee build/test-results/cpu.log
+          silk task check 2>&1 | tee build/test-results/cpu.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -52,28 +51,17 @@ jobs:
         if: runner.os == 'Windows'
         with:
           arch: x64
-      - uses: ./.github/actions/setup-silk
-        with:
-          native-options: ${{ matrix.setup }}
-      - name: Rectangle click and Tab against CPU reference in X11 and Wayland
+      - name: Install Linux window hosts
         if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libx11-dev libxkbcommon-dev libwayland-dev wayland-protocols libglfw3-dev libvulkan1 xvfb xauth weston
+      - uses: ./.github/actions/setup-silk
+      - run: silk task setup-ci ${{ matrix.setup }}
+      # Linux checks X11 and Wayland; macOS and Windows open a real window.
+      - name: Rectangle click and Tab against the CPU reference
         shell: bash
         run: |
           mkdir -p build/test-results
-          node scripts/studio check --release --backend all 2>&1 | tee build/test-results/native.log
-      - name: Rectangle click and Tab against CPU reference on macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          mkdir -p build/test-results
-          node scripts/studio check --release 2>&1 | tee build/test-results/native.log
-      - name: Rectangle click and Tab against CPU reference on Win32
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force build/test-results | Out-Null
-          node scripts/studio check --release 2>&1 | Tee-Object -FilePath build/test-results/native.log
-          exit $LASTEXITCODE
+          silk task native check --release 2>&1 | tee build/test-results/native.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -86,14 +74,19 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev wayland-protocols xvfb xauth
       - uses: ./.github/actions/setup-silk
-        with:
-          native-options: --browser
+      - name: Select existing Chromium
+        run: silk task setup-ci --browser
+      # Ubuntu's AppArmor profile denies unprivileged user namespaces, which Chromium's sandbox
+      # needs. Without this Chromium aborts at startup with "No usable sandbox".
+      - name: Allow the Chromium sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Reference, Rectangle click, wheel and localStorage reload
         shell: bash
         run: |
           mkdir -p build/test-results
-          node scripts/browser test -- --size 1280,800 --click 603,723 --stored studio 2>&1 | tee build/test-results/browser.log
+          silk task browser test -- --width 1280 --height 800 --click --click-x 603 --click-y 723 --stored studio 2>&1 | tee build/test-results/browser.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

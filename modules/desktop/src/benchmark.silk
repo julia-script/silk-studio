@@ -36,7 +36,10 @@ import ui_tree.input { Input, MOD_CONTROL }
 import ui_app.runtime { Runtime, pump, tick, resize }
 import ui_app.harness { click, press }
 import ui_tree.inspect { findAll }
-import ui_tree.lib { UiTree, TreeError, FrameInput, CpuSnapshot, Mutation }
+import ui_tree.lib { Mutation }
+import ui_tree.engine { UiTree, TreeError }
+import ui_tree.node { FrameInput }
+import ui_tree.inspect { CpuSnapshot }
 import ui_tree_window.lib { feed, windowCursor, HostState, serve }
 import ui_inspect_server.lib { Inspector }
 import font_collection.lib { FontCollection }
@@ -50,7 +53,8 @@ import ui_renderer.renderer { UiRenderer }
 import ui_renderer.text { TextSettings }
 import window.event { Event }
 import window.native { NativePlatform }
-import window.platform { Platform }
+// Interface methods resolve through this import; silk#2819 reports it as unused.
+import window.platform { Platform as _Platform }
 import window.types { RawSurface, Wait, WindowError, WindowId, WindowOptions, TitleBar }
 import webgpu.runtime { Device, GpuError, Instance, RequestAdapterOptions }
 import webgpu.runtime as runtime

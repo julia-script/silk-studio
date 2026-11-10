@@ -26,7 +26,8 @@ import codec.jpeg { JpegError }
 import files { Storage }
 import silk.collections.bytes { Bytes }
 import window.menu { OpenDialog, SaveDialog }
-import window.platform { Platform }
+// Interface methods resolve through this import; silk#2819 reports it as unused.
+import window.platform { Platform as _Platform }
 import window.types { DialogId }
 import silk.core.result { Result }
 import ui_tree.inspect { encodePng }
@@ -34,7 +35,10 @@ import studio.model { Studio, Message }
 import studio.render { Canvas, textResources }
 import ui_app.app { NoCommand }
 import ui_app.runtime { Runtime, pump }
-import ui_tree.lib { UiTree, TreeError, FrameInput, CpuSnapshot, Mutation }
+import ui_tree.lib { Mutation }
+import ui_tree.engine { UiTree, TreeError }
+import ui_tree.node { FrameInput }
+import ui_tree.inspect { CpuSnapshot }
 import ui_tree_window.lib { feed }
 import ui_inspect_server.lib { Inspector }
 import font_collection.lib { FontCollection }

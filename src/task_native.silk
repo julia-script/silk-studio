@@ -1,0 +1,261 @@
+//! Build, run, window-check and bundle the native Studio application.
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem, Path }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { String }
+import task_support { build, pathText, rootPath, require }
+
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  import task_process { start, finish }
+  import task_display { openDisplay, closeDisplay, views, joined }
+}
+
+static if Intrinsic.targetOperatingSystem() == "windows" {
+  import silk.num.i32
+}
+
+pub effect fn say(message: string) -> ()
+  ! WriterError {
+  let mut stdout = StdoutWriter.make()
+  run Writer.writeString(message) |> Effect.provideMut<Writer>(&mut stdout)
+  run Writer.writeString("\n") |> Effect.provideMut<Writer>(&mut stdout)
+}
+
+/// Builds the desktop application and answers its executable path.
+pub effect fn app(release: bool) -> String
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  return run build("modules/desktop", release, false)
+}
+
+/// A path the user typed: absolute, or relative to the directory `silk task` was run from.
+pub effect fn userPath(value: string) -> Path
+  ! TaskError | FileError | HostInputError | OutOfMemoryError
+  ? &mut HostInput | &mut Allocator {
+  if String.startsWith(value, "/") {
+    return run Path.make(value)
+  }
+  let here = run Task.invocationDirectory()
+  return run Path.resolve(&here, value)
+}
+
+pub effect fn runApp(release: bool, inspect: bool, file: string) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let binary = run app(release)
+  let mut words = List<String>.make()
+  if inspect {
+    run words.append(run String.copy("--inspect"))
+  }
+  if file != "" {
+    let path = run userPath(file)
+    run words.append(run String.copy(pathText(&path)))
+  }
+  let mut views = List<string>.make()
+  let items = words.asSlice()
+  let mut at: usize = 0
+  while at < items.length {
+    run views.append(String.view(&items[at]))
+    at = at + 1
+  }
+  run Task.exec(String.view(&binary), views.asSlice())
+}
+
+/// Dispatches Rectangle and Tab, then compares the window surface with the CPU reference.
+/// Linux runs each backend under a private Xvfb or headless Weston; other hosts open a window.
+pub effect fn check(release: bool, backend: string) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  run require(
+    backend == "all" || backend == "x11" || backend == "wayland",
+    "--backend must be all, x11 or wayland",
+  )
+  let binary = run app(release)
+  static if Intrinsic.targetOperatingSystem() == "linux" {
+    if backend == "all" {
+      run checkOn(String.view(&binary), "x11")
+      run checkOn(String.view(&binary), "wayland")
+    } else {
+      run checkOn(String.view(&binary), backend)
+    }
+  } else {
+    static if Intrinsic.targetOperatingSystem() == "darwin" {
+      run checkOn(String.view(&binary), "x11")
+    } else {
+      run checkWindows(String.view(&binary))
+    }
+  }
+}
+
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  effect fn checkOn(binary: string, backend: string) -> ()
+    ! TaskError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    let mut label = backend
+    static if Intrinsic.targetOperatingSystem() == "darwin" {
+      label = "darwin"
+    }
+    let heading = run joined("--- ", label)
+    run say(String.view(&heading))
+    let display = run openDisplay(backend)
+    let mut environment = run views(&display.environment)
+
+    // Linux children default to scale 1 already; match it on macOS for a reproducible surface.
+    static if Intrinsic.targetOperatingSystem() == "darwin" {
+      if let Option<Bytes>.None = run HostInput.variableNamed("SILK_WINDOW_SCALE") {
+        run environment.append("SILK_WINDOW_SCALE=1")
+      }
+    }
+    let result = run Effect.result(windowCheck(binary, environment.asSlice()))
+    drop environment
+    run closeDisplay(move display)
+    let mut status = run joined("--- ", label)
+    match move result {
+      Result<(), TaskError | FileError | HostInputError | OutOfMemoryError>.Success { .. } => {
+        run String.append(&mut status, ": passed")
+        run say(String.view(&status))
+      }
+      Result<(), TaskError | FileError | HostInputError | OutOfMemoryError>.Failure { error } => {
+        run String.append(&mut status, ": failed")
+        run say(String.view(&status))
+        fail move error
+      }
+    }
+  }
+
+  effect fn windowCheck(binary: string, environment: &[string]) -> ()
+    ! TaskError | FileError | HostInputError | OutOfMemoryError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    let mut process = run start(binary, &["--check"], environment, false, false, true)
+    let output = run finish(&mut process, 300000)
+    if output.code != 0 {
+      fail TaskError { message: run String.copy("Studio window check failed"), status: output.code }
+    }
+  }
+}
+
+static if Intrinsic.targetOperatingSystem() == "windows" {
+  // Windows children get an explicit environment: the parent's process essentials plus scale 1.
+  effect fn checkWindows(binary: string) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    run say("--- windows")
+    let path = run Path.make(binary)
+    let root = run rootPath("")
+    let mut request = run ChildProcess.requestWithin(&path, &root)
+    run ChildProcess.addArgument(&mut request, "--check")
+    let keys = [
+      "PATH",
+      "SYSTEMROOT",
+      "WINDIR",
+      "TEMP",
+      "TMP",
+      "USERPROFILE",
+      "APPDATA",
+      "LOCALAPPDATA",
+      "SILK_WINDOW_BACKEND",
+    ]
+    let mut at: usize = 0
+    while at < keys.length {
+      if let Option<Bytes>.Some { value } = move run HostInput.variableNamed(keys[at]) {
+        run ChildProcess.setVariableBytes(&mut request, String.utf8Bytes(keys[at]), value.asSlice())
+      }
+      at = at + 1
+    }
+    match move run HostInput.variableNamed("SILK_WINDOW_SCALE") {
+      Option<Bytes>.Some { value } => run ChildProcess.setVariableBytes(
+        &mut request,
+        b"SILK_WINDOW_SCALE",
+        value.asSlice(),
+      )
+      Option<Bytes>.None => run ChildProcess.setVariableBytes(
+        &mut request,
+        b"SILK_WINDOW_SCALE",
+        b"1",
+      )
+    }
+    let outcome = run ChildProcess.submit(&request)
+    let mut stdout = StdoutWriter.make()
+    run Writer.writeAll(ChildProcess.outputBytes(&outcome))
+      |> Effect.provideMut<Writer>(&mut stdout)
+    run Writer.writeAll(ChildProcess.errorBytes(&outcome)) |> Effect.provideMut<Writer>(&mut stdout)
+    let code = ChildProcess.exitCode(&outcome) |> Option<i32>.unwrapOr(-1)
+    if code != 0 {
+      run say("--- windows: failed")
+      fail TaskError { message: run String.copy("Studio window check failed"), status: code }
+    }
+    run say("--- windows: passed")
+  }
+}
+
+/// A self-contained, unsigned macOS application with the licensed fallback fonts.
+pub effect fn bundle() -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  static if Intrinsic.targetOperatingSystem() != "darwin" {
+    run Task.abort("bundle packages macOS only")
+  } else {
+    let binary = run app(true)
+    let destination = run rootPath("build/Silk Studio.app")
+    let macos = run Path.join(&destination, "Contents/MacOS")
+    let fonts = run Path.join(&destination, "Contents/Resources/assets/fonts")
+    run FileSystem.createDirectoriesRecursively(&macos)
+    run FileSystem.createDirectoriesRecursively(&fonts)
+
+    // Stage then rename, so a running bundled app is never overwritten in place.
+    let executable = run Path.make(String.view(&binary))
+    let staged = run Path.join(&macos, "silk-studio-native-app.next")
+    let installed = run Path.join(&macos, "silk-studio-native-app")
+    let bytes = run FileSystem.readFile(&executable)
+    run FileSystem.writeFile(&staged, Bytes.asSlice(&bytes))
+    run Task.exec("chmod", &["755", pathText(&staged)])
+    run Task.exec("mv", &["-f", pathText(&staged), pathText(&installed)])
+    let names = [
+      "NotoSerif-Regular.subset.ttf",
+      "NotoMono-Regular.subset.ttf",
+      "Noto-LICENSE-OFL.txt",
+    ]
+    let sources = run rootPath("assets/fonts")
+    let mut at: usize = 0
+    while at < names.length {
+      let source = run Path.join(&sources, names[at])
+      let target = run Path.join(&fonts, names[at])
+      let data = run FileSystem.readFile(&source)
+      run FileSystem.writeFile(&target, Bytes.asSlice(&data))
+      at = at + 1
+    }
+
+    // The launcher changes to Resources so the runtime's assets/fonts paths resolve in the bundle.
+    let launcher = run Path.join(&macos, "SilkStudio")
+    run FileSystem.writeFile(
+      &launcher,
+      b"#!/bin/sh\ncd \"$(dirname \"$0\")/../Resources\" || exit 1\nexec ../MacOS/silk-studio-native-app \"$@\"\n",
+    )
+    run Task.exec("chmod", &["755", pathText(&launcher)])
+    let plist = run Path.join(&destination, "Contents/Info.plist")
+    run FileSystem.writeFile(
+      &plist,
+      b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>CFBundleName</key><string>Silk Studio</string>\n<key>CFBundleDisplayName</key><string>Silk Studio</string>\n<key>CFBundleIdentifier</key><string>org.silk-lang.studio.native</string>\n<key>CFBundleExecutable</key><string>SilkStudio</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>0.1.0</string>\n<key>CFBundleVersion</key><string>1</string>\n<key>LSMinimumSystemVersion</key><string>26.0</string>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n",
+    )
+    run say(pathText(&destination))
+  }
+}
+
+/// Runs the Studio contract executable, which also prints CPU workload timings.
+pub effect fn contracts(release: bool) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let binary = run build("modules/tests", release, false)
+  run Task.exec(String.view(&binary), &[])
+}

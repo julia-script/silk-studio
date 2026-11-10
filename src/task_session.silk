@@ -1,0 +1,196 @@
+//! An isolated Studio session driven through its inspector, and the shared check measurements.
+static if Intrinsic.targetOperatingSystem() == "darwin"
+  || Intrinsic.targetOperatingSystem() == "linux" {
+  import silk.cli.task { Task, TaskError }
+  import silk.collections.bytes { Bytes }
+  import silk.collections.list { List }
+  import silk.core.effect { Effect }
+  import silk.core.option { Option }
+  import silk.io.writer { WriterError }
+  import silk.json.value { Value }
+  import silk.mem.allocator { Allocator, OutOfMemoryError }
+  import silk.system.child_process { ChildProcess, ProcessError }
+  import silk.system.filesystem { FileError, FileSystem, Path }
+  import silk.system.host_input { HostInput, HostInputError }
+  import silk.system.monotonic_clock { MonotonicClock }
+  import silk.system.monotonic_clock_native { OsMonotonicClock }
+  import silk.system.system_clock { SystemClock }
+  import silk.text.string { String }
+  import silk.num.f64
+  import silk.num.i64
+  import silk.num.usize
+  import task_inspector { Inspector, attempt, request }
+  import task_json as J
+  import task_native { app, userPath }
+  import task_process { Process, launch, poll, pause }
+  import task_support { pathText, rootPath }
+
+  /// Milliseconds on the monotonic clock, with sub-millisecond precision.
+  pub fn now() -> f64 {
+    let mut clock = OsMonotonicClock.make()
+    let instant = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
+    return i64.toF64(SystemClock.seconds(&instant)) * 1000.0
+      + i64.toF64(SystemClock.nanoseconds(&instant)) / 1000000.0
+  }
+
+  pub fn sleep(milliseconds: i64) -> () {
+    let end = now() + i64.toF64(milliseconds)
+    while now() < end {
+      pause()
+    }
+  }
+
+  /// The app under test: `--app`, or the release desktop build.
+  pub effect fn binary(explicit: string) -> String
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    if explicit == "" {
+      return run app(true)
+    }
+    let path = run userPath(explicit)
+    return run String.copy(pathText(&path))
+  }
+
+  /// The directory a path option names, or `fallback` under the repository root; created if needed.
+  pub effect fn outputDirectory(value: string, fallback: string) -> Path
+    ! TaskError | FileError | HostInputError | OutOfMemoryError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    let path = if value == "" {
+      run rootPath(fallback)
+    } else {
+      run userPath(value)
+    }
+    run FileSystem.createDirectoriesRecursively(&path)
+    return move path
+  }
+
+  /// A fresh session directory under /tmp, which keeps Unix socket paths short.
+  pub effect fn temporary(prefix: string) -> Path
+    ! FileError | OutOfMemoryError
+    ? &mut Allocator | &mut FileSystem {
+    let parent = run Path.make("/tmp")
+    let directory = run FileSystem.temporaryDirectory(&parent, prefix)
+    return run Path.fromBytes(Path.rawBytes(&directory.path))
+  }
+
+  /// Removes a session directory, including a socket the app may have left behind.
+  pub effect fn remove(directory: &Path) -> ()
+    ! TaskError | HostInputError | OutOfMemoryError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    run Task.exec("rm", &["-rf", "--", pathText(directory)])
+  }
+
+  /// Starts the app with its inspector on `socket`, writing output to `log`.
+  pub effect fn startApp(
+    program: string,
+    arguments: &[string],
+    socket: &Path,
+    log: &Path,
+    detached: bool,
+  ) -> Process
+    ! TaskError | FileError | HostInputError | OutOfMemoryError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    let mut assignment = run String.copy("SILK_UI_INSPECT=")
+    run String.append(&mut assignment, pathText(socket))
+    return run launch(program, arguments, &[String.view(&assignment)], log, detached)
+  }
+
+  /// Waits for the inspector's first reply, and with `layout` for a laid-out frame.
+  pub effect fn ready(
+    child: &mut Process,
+    inspector: &Inspector,
+    log: &Path,
+    timeout: i64,
+    layout: bool,
+  ) -> Value
+    ! TaskError | FileError | OutOfMemoryError | WriterError
+    ? &mut Allocator | &mut FileSystem {
+    let deadline = now() + i64.toF64(timeout)
+    let hello = run request("hello")
+    while true {
+      if run poll(&mut child.*) {
+        run exited(log)
+      }
+      if let Option<Value>.Some { value } = move run attempt(inspector, &hello) {
+        if !layout || J.whole(&value, "frame") > 0 {
+          return move value
+        }
+      }
+      if now() >= deadline {
+        run Task.abort("Inspector did not start")
+      }
+      sleep(50)
+    }
+    return Intrinsic.trap("unreachable")
+  }
+
+  pub effect fn exited(log: &Path) -> never
+    ! TaskError | FileError | OutOfMemoryError
+    ? &mut Allocator | &mut FileSystem {
+    let bytes = run FileSystem.readFile(log)
+    let mut message = run Bytes.copy(b"Studio exited early:\n")
+    run Bytes.append(&mut message, Bytes.asSlice(&bytes))
+    let text = run J.text(move message)
+    run Task.abort(String.view(&text))
+  }
+
+  pub effect fn expect(condition: bool, message: string) -> ()
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    if !condition {
+      run Task.abort(message)
+    }
+  }
+
+  pub effect fn writeJson(path: &Path, value: &Value) -> ()
+    ! TaskError | FileError | OutOfMemoryError | WriterError
+    ? &mut Allocator | &mut FileSystem {
+    let bytes = run J.pretty(value)
+    run FileSystem.writeFile(path, Bytes.asSlice(&bytes))
+  }
+
+  fn sorted(values: &[f64], target: &mut List<f64>) -> () {
+    let ordered = target.asMutSlice()
+    let mut i: usize = 0
+    while i < values.length {
+      let mut j = i
+      while j > 0 && ordered[j - 1] > values[i] {
+        ordered[j] = ordered[j - 1]
+        j = j - 1
+      }
+      ordered[j] = values[i]
+      i = i + 1
+    }
+  }
+
+  /// Sample count, median (the upper middle when `upper`), 95th percentile and maximum.
+  pub effect fn summary(values: &[f64], upper: bool) -> Value
+    ! TaskError | OutOfMemoryError
+    ? &mut Allocator {
+    run expect(values.length > 0, "No samples to summarize")
+    let mut ordered = run List<f64>.makeWithCapacity(values.length)
+    let mut fill: usize = 0
+    while fill < values.length {
+      run ordered.append(0.0)
+      fill = fill + 1
+    }
+    sorted(values, &mut ordered)
+    let items = ordered.asSlice()
+    let middle = items.length / 2
+    let median = if !upper && items.length % 2 == 0 {
+      (items[middle - 1] + items[middle]) / 2.0
+    } else {
+      items[middle]
+    }
+    let mut result = J.object()
+    run J.set(&mut result, "samples", J.integer(usize.toI64(items.length)))
+    run J.set(&mut result, "medianMs", J.number(median))
+    run J.set(
+      &mut result,
+      "p95Ms",
+      J.number(items[f64.toUsize(f64.floor(usize.toF64(items.length - 1) * 0.95))]),
+    )
+    run J.set(&mut result, "maxMs", J.number(items[items.length - 1]))
+    return move result
+  }
+}
